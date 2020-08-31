@@ -1,0 +1,1601 @@
+---
+title: "Informe Técnico - Trabajo Final Analítica Predictiva"
+author: "Alejandro Henao Ruiz - Janick Alberto Reales Salas - David Andres Gallego Martinez"
+date: "7/8/2020"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = "")
+```
+
+```{r echo=FALSE}
+
+# - Librerias
+library(dplyr)
+library(stringi)
+library(lubridate)
+library(reshape)
+library(RColorBrewer)
+library(randomForest)
+```
+
+## **INTRODUCCIÓN**  
+
+Los datos abiertos son una gran fuente de información para aquellos que deseen estudiar las características del entorno en que se encuentran en aras de brindar alternativas que permitan mejorar la situación actual. Dichas alternativas varían desde un sencillo análisis descriptivo para entender los sucesos que se han venido presentando históricamente, hasta la implementación de programas más avanzadas como las herramientas de *Aprendizaje de Máquinas* que permiten encontrar patrones en los datos que no se pueden visualizar a simple vista por un humano o el entrenamiento  de un algoritmo predictivo que ayude a realizar estimaciones de lo que pasará en el futuro, con lo que se pueden apoyar sistemas de toma de decisiones o el desarrollo de estrategias de optimización.  
+
+En este trabajo se propone la utilización de herramientas de aprendizaje de máquinas para realizar un agrupamiento y predicción de la accidentalidad en Medellín a partir de los datos recientes de accidentalidad reportados en las bases de datos abiertos de [MEData](http://medata.gov.co/). Las tablas descargadas y la limpieza de los datos se encuentran alojadas en este [repositorio](). Se construyó además una [aplicación en Shiny](https://alejohr89.shinyapps.io/Borrador_Predictiva/) para que los usuarios pueda explorar de forma interactiva el estudio de accidentalidad realizado.  
+
+Como parte de los lineamientos para la realización de este trabajo, se solicitó considerar fechas especiales dentro de los años de 2014 a 2018. En este caso, se crea una nueva variable en la base de datos que contenga información sobre los días para determinar si es un día laboral o no y adicional para identificar cuáles de los días laborales es un día festivo, a partir de un conjunto de datos encontrado en internet con información de los días festivos en Colombia. Se puede consultar el archivo de [limpieza de datos]() para ver la integración de las fechas especiales al conjunto de datos.  
+
+## **EXPLORACIÓN DE LOS DATOS**  
+
+Se realiza un análisis exploratorio para descubrir las principales características de la información contenida en la base de datos de accidentalidad a través de gráficos. Con este análisis se busca completar la limpieza de los datos de manera que se adecuen para realizar los procesos posteriores de predicción y agrupamiento.  
+
+#### **Tabla de datos y variables**  
+
+Se muestra a continuación los primeros seis registros de la base de datos "limpia".  
+
+```{r}
+## se cargan los datos
+df <- read.csv("df_accidentalidad.csv")
+
+## primeros registros
+head(df)
+```  
+
+**Definición de las variables**  
+
+* FECHA: fecha completa de ocurrencia del accidente.  
+* DIA: día de ocurrencia del accidene (día del mes) de acuerdo a las fechas.  
+* PERIODO: año de occurrencia del accidente, de acuerdo a las fechas.  
+* CLASE: indica el tipo de accidente: choque, atropello, caída ocupante, incendio, volcamiento.  
+* GRAVEDAD: indica las consecuencias del accidente: herido, muerto, solo daños.  
+* DIA_NOMBRE: nombre del día de la semana, correspondiente a la fecha de ocurrencia del accidente.  
+* MES: tiempo de ocurrencia del accidente, mes del año, de acuerdo a las fechas registradas.  
+* MES_NOMBRE: corresponde al cambio del mes de formato numérico a texto, donde ocurrieron los accidentes.  
+* LATITUD Y LONGITUD: coordenadas de los accidentes de la base de datos de movilidad de Medellín.  
+* SEMANA: semana del año de ocurrencia del accidente.  
+* BARRIO: lugar de la ciudad de Medellín donde ocurrieron los accidentes registrados.  
+* COMUNA: subdivisión administrativa donde se encuentran contenidos los barrios de una ciudad, y donde ocurrieron los accidentes registrados.  
+* FECHAS_ESP: es una diferenciación de los días en: día laborar, día no laboral y festivos.  
+
+#### **Distribución de los datos por comunas**  
+
+Con la ayuda de un gráfico de barras se identifica la distribución de los accidentes por comuna durante el periodo de estudio. En este gráfico se muestra el porcentaje de la accidentalidad total que corresponde a cada comuna y corregimiento de Medellín.  
+
+```{r fig.align="center", fig.width=8, fig.height=6, echo=FALSE}
+grafico_comuna <- df$COMUNA %>% table() %>% prop.table() %>% `*`(100) %>% round(2)
+par(mar=c(5,15,2,2)) # - Inferior, Izquierdo, Superior, Derecho
+barplot(grafico_comuna,
+        main = "Porcentaje de accidentes por comuna [2014-2018]",
+        xlab = "Porcentaje [%]",
+        xlim = c(0,25),
+        horiz = TRUE,
+        cex.names = 0.6,
+        las = 1,
+        col=brewer.pal(n = 21, name = "RdBu")) 
+grid(20,20, lty = 3, lwd = 0.1)
+```  
+
+La menor ocurrencia de accidentes se presenta en los corregimientos. Este resultado era de esperarse, ya que los corregimientos correspondes a zonas rurales de la ciudad, las cuales no alcanza a llegar al 1% de la accidentalidad total reistrada durante el periodo de estudio, por tanto, se toma la decisión de eliminar los datos de los corregimientos para no afectar los análisis y los modelos predictivos.
+  
+```{r, echo=FALSE}
+# Se eliminan las obaservaciones de los corregimientos
+df <- subset(df, subset = (COMUNA != "CORREGIMIENTO DE SAN SEBASTIAN DE PALMITAS"))
+df <- subset(df, subset = (COMUNA != "CORREGIMIENTO DE SAN CRISTOBAL"))
+df <- subset(df, subset = (COMUNA != "CORREGIMIENTO DE ALTAVISTA"))
+df <- subset(df, subset = (COMUNA != "CORREGIMIENTO DE SAN ANTONIO DE PRADO"))
+df <- subset(df, subset = (COMUNA != "CORREGIMIENTO DE SANTA ELENA"))
+
+# Se organizan las columnas de df
+df <- select(df, LATITUD, LONGITUD, FECHA, DIA, SEMANA, MES, FECHAS_ESP, PERIODO, DIA_NOMBRE, MES_NOMBRE, COMUNA, BARRIO, CLASE, GRAVEDAD)
+```  
+
+Se vuelve a graficar la distribución de la acciedentalidad por comunas para verificar el cambio realizado y los nuevos porcentajes de accidentalidad.  
+
+```{r fig.align="center", fig.width=8, fig.height=6, echo=FALSE}
+grafico_comuna <- df$COMUNA %>% table() %>% prop.table() %>% `*`(100) %>% round(2)
+par(mar=c(5,8,2,2)) # - Inferior, Izquierdo, Superior, Derecho
+barplot(grafico_comuna,
+        main = "Porcentaje de accidentes por comuna [2014-2018]",
+        xlab = "Porcentaje [%]",
+        xlim = c(0,25),
+        horiz = TRUE,
+        cex.names = 0.6,
+        las = 1,
+        col=brewer.pal(n = 16, name = "RdBu")) 
+grid(20,20, lty = 3, lwd = 0.1)
+```  
+
+La comuna con mayor porcentaje de accidentes entre los años 2014 y 2018 es *La Candelaria*, que se compone de los barrios de la zona central de la ciudad y con mayor flujo vehicular, debido a la alta concentración de comercios y entidades administrativas de la ciudad. A esta comuna le sigue la de *Laureles - Estadio*, en la cual confluyen diferentes vías principales de la ciudad como son la avenida San Juan y las carreras 70 y 80. A estás comunas les sigue la de *Castilla*, que ocupa cierto tramo de la autopista norte.  
+
+
+#### **Accidentalidad por barrios**  
+
+Se realiza a continuación un pareto donde se muestran los 10 primeros barrios de acuerdo al número de accidentes ocurridos durante el periodo comprendido entre 2014 y 2018.  
+
+```{r} 
+## conteo
+acc_barrio <- table(df$BARRIO)
+acc_barrio <- sort(acc_barrio, decreasing=TRUE)
+acc_barrio <- head(acc_barrio,10)
+
+## plot
+barrios_plot <- barplot(acc_barrio,
+        main="Top 10 barrios con mayor cantidad de accidentes",
+        xlab = "",
+        col=brewer.pal(n = 10, name = "RdBu"),
+        xaxt="n")
+labs <- names(acc_barrio)
+text(cex=0.65, x=barrios_plot-.7, y=-800, labs, xpd=TRUE, srt=45)
+grid(20,20, lty = 3, lwd = 0.1)
+```  
+
+Se observa que entre los 265 barrios de la ciudad de Medellín, fueron *La Candelaria* y *Caribe* los que presentaron la mayor cantidad de accidentes durante el periodo de estudio. El primer barrio se encuentra en la zona central de la ciudad, con mayor accidentalidad debido a lo explicado antes. El segundo cuenta con una alta afluencia de vehículos ya que por el cruza la carrera 46 C, muy utilizada por los vehículos que se dirigen hacia el norte de la ciudad.  
+
+
+
+
+El siguiente gráfico muestra la distribución de la accidentalidad por mes cada año.  
+
+```{r fig.align="center", fig.width=10, fig.height=4, echo=FALSE}
+# - accidentalidad por mes/año
+tabla_PM <- table(df$PERIODO, df$MES)
+
+## plot
+image(t(tabla_PM[5:1,]), xaxt='n',yaxt='n', xlab = "MES", ylab="AÑO")
+title(main="Accidentalidad por año y mes")
+axis(1, at=seq(0,1, by=1/11), labels=c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembe", "Octubre", "Noviembre", "Diciembre"),  las=1)
+axis(2, at=seq(0,1, by=1/4), labels=c(2018,2017,2016,2015,2014), las=1)
+
+```  
+En general, la menor ocurrencia de accidentes se encuentra en el mes de enero, que es un mes donde no se celebra alguna festividad importante en la ciudad y el flujo de personas es relativamente bajo, debido a los foráneos que regresan a sus lugares de procedencia en el mes de diciembre.  
+
+En contraste, en promedio, agosto es el mes con la mayor ocurrencia de accidentes. Se debe tener en cuenta que en este mes se celebra la *Feria de las Flores* y que la afluencia de personas es alta y la ciudad cuenta con la llegada de personas de todas partes en estas fechas.  
+
+En los meses de marzo, mayo, septiembre y octubre también se observan valores altos de accidentalidad en la ciudad, mentras que el resto de los meses la accidentalidad parece mantenerse en un promedio.
+
+
+### Gráfico clase y tipo de accidente
+
+En las bases de datos la ocurrencia de accidentes se encuentra clasificada de acuerdo a la gravedad y clase de acccidentes. En la siguiente gráfica se muestra cómo están distribuídos los accidentes respecto a estos parámetros.  
+
+
+```{r fig.align="center", fig.width=8, fig.height=6, echo=FALSE}
+## conteo
+conteoGravClass <- table(df$GRAVEDAD, df$CLASE)
+
+## plot
+barplot(conteoGravClass, main="Distribución de Accidentes por Gravedad y Clase",
+        xlab="Clase de Accidente", col=c("green", "blue", "red"),
+        legend=rownames(conteoGravClass),
+        beside=TRUE,
+        cex.names = 0.7,
+        las=1)
+```  
+
+La mayor cantidad de accidentes presentados son *CHOQUES*, de los cuales en su mayoría solo ocurren daños, seguido de eventos con heridos y eventos con muertes. La clase *OTROS* presenta una alta participación en la ocurrencia de accidentes. Habría que realizar un estudio más profundo para identificar qué tipo de eventos se presentan en estos casos.  
+
+Los *ATROPELLOS* y *CAIDA DE OCUPANTES* presentan una alta cantidad de personas heridas, en ninguno de estos casos se observa solo ocurrencia de daños y ocurren muchas más muertes por los atropellos que por las caídas. 
+
+Los *VOLCAMIENTOS* se presentan en su mayoría heridos, seguido de solo daños y solo 4 muertes ocurridas en el período de estudio. Finalmente, la clase con menos participación es la de *INCENDIO*, con 15 eventos con daños y 14 con heridos sin ninguna ocurrencia de muertes. Se procede a eliminar esta clase del estudio debido a su baja participación.  
+
+```{r}
+## se elimina incendio.  
+df <- subset(df, CLASE != "INCENDIO")
+table(df$CLASE)
+```
+
+
+## **Modelamiento**
+
+Para la selección del modelo predictivo que se utilizará para construir la aplicación en Shiny a partir de los datos de accidentalidad en Medellín, se procede a comparar diferentes modelos y evaluar su desempeño en entrenamiento y prueba calculando la *el error cuadrático medio* (*MSE*). En este caso, variaciones de más del 15% entre los *MSE* obtenidos en ambos conjuntos, se considerarán sospechosas de sobreentrenamiento del modelo.
+
+Previamente se realizó la limpieza de las bases de datos obtenidad de **MEData**. Estas se almacenaron en el archivo en el dataframe *df*, y a partir de este punto, realizaremos una copia de ese dataframe que llamaremos *accidentalidad*.
+
+```{r}
+# - Realizamos copia del dataframe
+accidentalidad <- df
+head(accidentalidad)
+```  
+
+Primero se seleccionan las variables que se utilizarán, que para este trabajo serán: *DIA*, *MES*, *SEMANA*, *FECHAS_ESP*, *PERIODO*, *COMUNA*, *BARRIO* y *CLASE*. Además de que se agrega la variable *DIA_ANNO* que muestra el número del día del año (1-365).  
+
+Luego se procede a dar un formato adecuado a las variables; se convertirá las variables *BARRIO*, *COMUNAS* y *CLASE* a categóricas (factor). Se tiene un número finito de barrios, sin embargo es bastante alto (271), por lo que se manejará la variable como continua y no como categórica. Las otras variables se convertirán nuevamente a factor luego de convertirlas en numéricas, ya que los modelos pueden trabajar mejor si se ingresan números en lugar de texo. Adicionalmente, las variables *MES* y *FECHAS_ESP* se trabajarán como categórica, mientras que se tratarán las variables *DIA*, *SEMANA* y *PERIODO* como continuas. 
+
+```{r eval=FALSE}
+library(lubridate)
+
+## se seleccionan variables
+accidentalidad <- select(accidentalidad, FECHA, DIA, MES, SEMANA, FECHAS_ESP, PERIODO, COMUNA, BARRIO, CLASE)
+accidentalidad$DIA_ANNO <- yday(accidentalidad$FECHA)
+  
+## variables a factores
+accidentalidad$MES <- as.factor(accidentalidad$MES)
+accidentalidad$FECHAS_ESP <- as.factor(accidentalidad$FECHAS_ESP)
+accidentalidad$CLASE <- as.factor(accidentalidad$CLASE)
+accidentalidad$BARRIO <- as.factor(accidentalidad$BARRIO)
+accidentalidad$COMUNA <- factor(accidentalidad$COMUNA, 
+                                levels = c("POPULAR","SANTA CRUZ", "MANRIQUE","ARANJUEZ","CASTILLA", 
+             "DOCE DE OCTUBRE", "ROBLEDO", "VILLA HERMOSA", "BUENOS AIRES",
+             "LA CANDELARIA", "LAURELES ESTADIO", "LA AMERICA", "SAN JAVIER",
+             "EL POBLADO", "GUAYABAL", "BELEN"))
+
+## factores a numérico y luego a factores
+accidentalidad$FECHAS_ESP <- as.factor(as.numeric(accidentalidad$FECHAS_ESP))
+accidentalidad$CLASE <- as.factor(as.numeric(accidentalidad$CLASE))
+accidentalidad$COMUNA <- as.factor(as.numeric(accidentalidad$COMUNA))
+accidentalidad$BARRIO <- as.numeric(accidentalidad$BARRIO)
+
+## DIA y SEMANA a numéricas
+accidentalidad$DIA <- as.numeric(accidentalidad$DIA)
+accidentalidad$SEMANA <- as.numeric(accidentalidad$SEMANA)
+
+## primeros registros
+head(accidentalidad)
+```  
+
+Se pretende precedir la accidentalidad por mes, semana y día, por lo que se crean tres nuevos dataframes. El primero, realizando un conteo de la accidentalidad por día, en el segundo se cuenta la accidentalidad por semana, y el tercero cuenta la accidentalidad por mes para cada año. Para esto se utilizan las funciones `group_by` y `summarise` del paquete **dplyr**.  
+
+Para cada dataframe se procede a entrenar 3 modelos y calcular su desempeño tanto en los datos de entrenamiento como en los datos de validación. Debido a que la cantidad de accidentes es un conteo, se hará uso del *modelo lineal generalizado con distribución Poisson*. El segundo modelo a entrenar será el de *k-Vecinos cercanos*, para el cual se planea realizar un proceso previo para seleccionar un k óptimo para cada conjunto de datos.  Por último, se ajustará un modelo de *Bosque Aleatorio*, para un determinado número de árboles.  
+
+Se procederá a calcular el **MSE** de entrenamiento y prueba para cada modelo y calcular la diferencia porcentual entre los mismos, de manera que se pueda establecer si el modelo está sobreentrenado (diferencia mayor al **15%**) o no.  
+
+
+#### **Modelamiento de accidentalidad por día**  
+
+Se realiza el conteo del número de accidentes ocurridos cada día durante el período comprendido entre el 2014 y el 2018. 
+
+```{r eval=FALSE}
+### conteo
+detach(package:dplyr)
+require(dplyr)
+acc_dia  <- accidentalidad %>% 
+    group_by(PERIODO, DIA_ANNO, FECHAS_ESP, COMUNA, BARRIO, CLASE) %>%
+    summarise(CANTIDAD = n())
+
+
+head(acc_dia)
+```  
+
+Se observa la distribución de la ocurrencia de accidentes.  
+
+```{r eval=FALSE}  
+## conteo accidentes
+table(acc_dia$CANTIDAD)
+```  
+Se dividen los datos en entrenamiento y prueba.  
+
+```{r eval=FALSE}
+### filtramos los datos
+trainSet_dia <- subset(acc_dia, 
+                      subset = (PERIODO %in% 
+                                    c(2014,2015,2016,2017)))
+testSet_dia <- subset(acc_dia, 
+                  subset = (PERIODO %in% 2018))
+
+## dimensiones
+dim(trainSet_dia)
+dim(testSet_dia)
+```  
+Ahora se procede realizar el entrenamiento y predicción de accidentalidad utilizando los modelos mencionados anteriormente.  
+
+**Modelo lineal generalizado - Distribución Poisson**  
+
+
+Se procede a ajustar el modelo con todas las variables utilizando la función `glm`, especificando la distribución Poisson como argumento.  
+
+```{r eval=FALSE}
+modeloPois_dia <- glm(CANTIDAD~., data=trainSet_dia, family = "poisson")
+summary(modeloPois_dia)
+```  
+El *PERIODO* no resulta ser significativo para el modelo, con un *valor p* bastante alto que no brinda evidencia para rechazar la hipótesis nula, por lo que se concluye que en este modelo ingresar el año no aporta información. 
+
+La inclusión de las comunas 5, 10, 11, 14, 15 y 16 es bastante significativa para el modelo. Cabe destacar que las comunas mencionadas son las de mayor ocurrencia de accidentalidad en Medellín durante el periodo de estudio.  Entre las clases de accidentes, los CHOQUES (CLASE3) son los de mayor ocurrencia, además de los más significativos para el modelo ajustado, con un *valor p* que es esencialmente cero, seguido de la clase de accidentes VOLCAMIENTO (CLASE6).  
+
+Por último, los días No Laborales no parecen ser significativos para el ajuste, de acuerdo con este modelo. En contraste la inclusión de los días laborales es muy significativa.  Además de que la variable clave para la predicción con este modelo (columna *DIA_ANNO*) muestra un *valor p* bastante alto, que indica que no puede favorecer la hipótesis alternativa y por tanto dicha variable no presenta relación alguna con la variable de respuesta bajo este escenario. Esto representa un inconveniente, ya que el objetivo es predecir la accidentalidad en Medellín por día. 
+
+Se procede a continuación a eliminar variables del modelo de una en una para observar el efecto separado sobre el ajuste del modelo y las otras variables.  
+
+```{r eval=FALSE}
+## modelo 2
+## eliminando variable PERIODO
+modeloPois_dia2 <- glm(CANTIDAD~.-PERIODO, data=trainSet_dia, family = "poisson")
+summary(modeloPois_dia2)
+```  
+La eliminación de la columna *PERIODO* no altera demasiado la interacción de las demás variables con la variable de respuesta, salvo el *INTERCEPTO*, que ahora se hace muy significativo para el modelo, con un *valor p* bastante bajo. La interacción de la columna DIA_ANNO con la variable respuesta no se vio afectada.  
+
+Se procede ahora a eliminar la variable CLASE, para observar si la interacción deseada mejora.  
+
+```{r eval=FALSE}
+## modelo 3
+## eliminando variables PERIODO y CLASE
+modeloPois_dia3 <- glm(CANTIDAD~.-CLASE, data=trainSet_dia, family = "poisson")
+summary(modeloPois_dia3)
+```  
+
+Se observa en este caso que el eliminar la variable CLASE tiene un efecto positivo en la interacción de las demás variables con la vaiable de respuesta. En este caso, aumenta el número de comunas que el modelo considera significativas para el ajuste. Además de que el *valor p* para la columna BARRIO disminuyó considerablemente.  
+
+La inclusión de la columna *PERIODO* provoca que el INTERCEPTO deje de ser significativo para el modelo. Además, la columna DIA_ANNO sigue mostrando un *valor p* que no permite rechazar la hipótesis nula.  
+
+Se ajusta ahora un cuarto modelo eliminando las columnas CLASE y PERIODO.  
+
+```{r eval=FALSE}
+## modelo 4
+## eliminando variables PERIODO y CLASE
+modeloPois_dia4 <- glm(CANTIDAD~.-PERIODO-CLASE, data=trainSet_dia, family = "poisson")
+summary(modeloPois_dia4)
+```  
+En este caso tanto el *INTERCEPTO* como *DIA_ANNO* pasan a ser ligeramente significativas para el modelo, con un *valor p* menor al 5% que no es muy contundente para rechazar la hippótesis nula, pero es mejor que los resultados arrojados por los ajustes anteriores, tomando en cuenta el objetivo del ajuste, que es poder predecir la accidentalidad por día en Medellín con cierto grado de seguridad.  
+
+A continuación se calcula el MSE para los datos de entrenamiento y validación con cada uno de los cuatro ajustes anteriores. Además se calcula el porcentaje de variación para descartar sobreentrenamiento.  
+
+```{r eval=FALSE}
+### MSE
+library(Metrics)
+
+## modelo Poisson 1 
+## train
+predPois_tr_d1 <- predict(modeloPois_dia, newdata = trainSet_dia)
+mseTr_Pois_d1 <- mse(trainSet_dia$CANTIDAD, predPois_tr_d1)
+
+## test
+predPois_ts_d1 <- predict(modeloPois_dia, newdata = testSet_dia)
+mseTs_Pois_d1 <- mse(testSet_dia$CANTIDAD, predPois_ts_d1)
+
+
+## modelo Poisson 2 
+## train
+predPois_tr_d2 <- predict(modeloPois_dia2, newdata = trainSet_dia)
+mseTr_Pois_d2 <- mse(trainSet_dia$CANTIDAD, predPois_tr_d2)
+
+## test
+predPois_ts_d2 <- predict(modeloPois_dia2, newdata = testSet_dia)
+mseTs_Pois_d2 <- mse(testSet_dia$CANTIDAD, predPois_ts_d2)
+
+
+## modelo Poisson 3
+## train
+predPois_tr_d3 <- predict(modeloPois_dia3, newdata = trainSet_dia)
+mseTr_Pois_d3 <- mse(trainSet_dia$CANTIDAD, predPois_tr_d3)
+
+## test
+predPois_ts_d3 <- predict(modeloPois_dia3, newdata = testSet_dia)
+mseTs_Pois_d3 <- mse(testSet_dia$CANTIDAD, predPois_ts_d3)
+
+
+## modelo Poisson 4 
+## train
+predPois_tr_d4 <- predict(modeloPois_dia4, newdata = trainSet_dia)
+mseTr_Pois_d4 <- mse(trainSet_dia$CANTIDAD, predPois_tr_d4)
+
+## test
+predPois_ts_d4 <- predict(modeloPois_dia4, newdata = testSet_dia)
+mseTs_Pois_d4 <- mse(testSet_dia$CANTIDAD, predPois_ts_d4)
+
+## variacion
+variacion_Pois_d1 <- (abs(mseTs_Pois_d1-mseTr_Pois_d1)/mseTr_Pois_d1)*100
+variacion_Pois_d2 <- (abs(mseTs_Pois_d2-mseTr_Pois_d2)/mseTr_Pois_d2)*100
+variacion_Pois_d3 <- (abs(mseTs_Pois_d3-mseTr_Pois_d3)/mseTr_Pois_d3)*100
+variacion_Pois_d4 <- (abs(mseTs_Pois_d4-mseTr_Pois_d4)/mseTr_Pois_d4)*100
+
+
+### tabla comparación
+comp_poisson_d <- data.frame(Ajuste_Pois=c("Ajuste1", "Ajuste2","Ajuste3", "Ajuste4"),
+                           MSE_train = c(mseTr_Pois_d1, mseTr_Pois_d2, mseTr_Pois_d3, mseTr_Pois_d4),
+                           MSE_test = c(mseTs_Pois_d1, mseTs_Pois_d2, mseTs_Pois_d3, mseTs_Pois_d4),
+                           variacion_percent = c(variacion_Pois_d1, variacion_Pois_d2, 
+                                         variacion_Pois_d3, variacion_Pois_d4))
+comp_poisson_d
+```  
+Los resultados obtenidos para los cuatro ajustes son buenos, teniendo en cuenta que la variación máxima del MSE caculado para ambos conjuntos debe ser de 15%. El **cuarto ajuste** presenta una variación de **1.11%** y es la más alta. Este ajuste, aunque sacrifica la variable CLASE, permite ganar significancia a la variable DIA_ANNO, y por tanto se toma para realizar la comparación con los modelos que se estudiarán más adelante.  
+
+
+**K Vecinos Cercanos**  
+
+El segundo modelo a ajustar es el *K-Vecinos Cercanos* para Regresión. Este hace parte de la librería *caret*. 
+
+Antes de realizar el ajuste del modelo, se selecciona un valor de $K$ óptimo de acuerdo al valor mínimo obtenido para el *RMSE*. Para hacerlo se tomará una muestra del 5% de los datos de entrenamiento ya que debido a la alta dimensionalidad de los datos conllevaría un alto costo computacional el poder realizar el proceso con los datos completos.  
+
+```{r message=FALSE, eval=FALSE}
+library(caret)
+set.seed(12345)
+
+## 5% datos
+n <- dim(trainSet_dia)[1]
+trFrac <- sample(1:n, round(0.05*n), replace=FALSE)
+trSet_05 <- trainSet_dia[trFrac,]
+
+
+## k óptimo
+trControl<-trainControl(method = "LGOCV",p=0.75,number = 15)
+modeloK_dia<-train(CANTIDAD~.,
+             data       = trSet_05,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = 1:50),
+             trControl  = trControl,
+             metric     = "rmse")
+
+print(modeloK_dia)
+```  
+
+```{r eval=FALSE}
+## plot
+plot(modeloK_dia)
+```  
+De acuerdo con el modelo, el valor óptimo de $k$ es $k=50$, sin embargo, se observa que el mse no varía mucho a partir de $k=15$, por lo que se toma este valor para el entrenamiento posterior.   
+
+```{r eval=FALSE}
+library(caret)
+
+## X train
+## la variable cantidad está en la posición 7
+trainX_d <- trainSet_dia[,-7]
+
+## Y train
+trainY_d <- trainSet_dia$CANTIDAD
+
+## KNN
+modeloKNN_dia <- knnreg(trainX_d,trainY_d,k=15, na.rm=TRUE)
+modeloKNN_dia
+```  
+Se realiza la predicción para los datos de entrenamiento y se calcula el mse.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predknn_tr_d <- predict(modeloKNN_dia, trainX_d)
+
+##métricas
+library(Metrics)
+(mseTr_knn_d <- mse(trainY_d, predknn_tr_d))
+```  
+Para prueba.  
+
+```{r eval=FALSE}
+## testX y testY
+testX_d <- testSet_dia[,-7]
+testY_d <- testSet_dia$CANTIDAD
+
+
+## Predicción prueba
+predknn_ts_d <- predict(modeloKNN_dia, testX_d)
+
+##métricas
+library(Metrics)
+(mseTs_knn_d <- mse(testY_d, predknn_ts_d))
+``` 
+Se calcula la diferencia porcentual.  
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_knn_d <- (abs(mseTs_knn_d-mseTr_knn_d)/mseTr_knn_d)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Vecinos cercanos es de ", round(variacion_knn_d,2), "%")
+```  
+Los valores de MSE obtenidos en este con el modelo de *Vecinos Cercanos* son más bajos que para el modelo anterior. En este caso se calcula una diferencia en el MSE de 14.9%, que se encuentra en el límite. Se puede decir entonces que el modelo no está sobreentrenado, aunque la diferencia entre ambos valores de MSE es alta.  
+
+
+**Bosque Aleatorio**  
+
+Antes de entrenar el modelo, se debe seleccionar un número óptimo de árboles. Para esto se toma una muestra del 10% de los datos de entrenamiento y se realiza el siguiente proceso, guiado de lo encontrado en este [RPubs](https://rpubs.com/Joaquin_AR/255596).  
+
+```{r eval=FALSE}
+library(randomForest)
+
+## muestra del 5%
+set.seed(12345)
+n <- dim(trainSet_dia)[1]
+trFrac_d <- sample(1:n, round(0.05*n), replace=FALSE)
+trSet_05_d <- trainSet_dia[trFrac_d,]
+
+
+modelo_ntree_d <- randomForest(CANTIDAD ~ ., data = trSet_05_d,
+                                    ntree = 500,importance = TRUE)
+
+oob_mse_d <- data.frame(rf_mse = modelo_ntree_d$mse,
+                      arboles = seq_along(modelo_ntree_d$mse))
+ggplot(data = oob_mse_d, aes(x = arboles, y = rf_mse )) +
+  geom_line() +
+  labs(title = "Evolución del out-of-bag-error vs número árboles",
+       x = "nº árboles") +
+  theme_bw()
+```  
+A partir de 100 árboles el error no varía mucho. Se selecciona este valor para entrenar el modelo con los datos de entrenamiento.  
+
+```{r eval=FALSE}
+## entrenamiento Random Forest
+set.seed(12345)
+
+modeloRF_dia <- randomForest(CANTIDAD~., data=trainSet_dia, ntree=100)
+modeloRF_dia
+```  
+El ajuste del modelo con 50 árboles solo explica el 22.94% de la varianza, lo cual es un valor bastamnnte bajo y puede indicar que al modelo le hacen falta variables que aporten más información. A continuación se calcula el mse para los datos de entrenamiento y prueba.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predRF_tr_d <- predict(modeloRF_dia, newdata = trainSet_dia)
+
+##métricas
+library(Metrics)
+(mseTr_rf_d <- mse(trainSet_dia$CANTIDAD, predRF_tr_d))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predRF_ts_d <- predict(modeloRF_dia, newdata = testSet_dia)
+
+## mse
+(mseTs_rf_d <- mse(testSet_dia$CANTIDAD, predRF_ts_d))
+```
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_rf_d <- (abs(mseTs_rf_d-mseTr_rf_d)/mseTr_rf_d)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Bosque Aleatorio entrenado con 20 árboles es de ", round(variacion_rf_d,2), "%")
+```  
+La variación del MSE es de 13.42% menor que la variación obtenida para el ajuste anterior y que el límite establecido, por lo que el modelo no se encuentra sobreentrenado. El ajuste del modelo con 100 árboles conlleva un costo computacional bastante alto, puesto que el ajustar el modelo demora al menos 30 minutos.  
+
+Se muestra a continuación la importancia de las variables en aras de saber qué tan influyente es la variable DIA_ANNO para la predicción de la accidentalidad.
+
+```{r eval=FALSE}
+## importancia
+varImpPlot(modeloRF_dia)
+```  
+Se observa que la variable *COMUNA* es la de mayor influencia, seguida de *BARRIO*, *CLASE* y *DIA_ANNO*. Las variables *FECHAS_ESP* y *PERIODO* no son tan inlfuyentes para el modelo. Se realiza un segundo ajuste sin contar estas variables.  
+
+```{r eval=FALSE}
+## entrenamiento Random Forest con FECHAS_ESP y PERIODO.
+set.seed(12345)
+
+library(randomForest)
+modeloRF_dia_2 <- randomForest(CANTIDAD~.-FECHAS_ESP-PERIODO, data=trainSet_dia, ntree=100)
+modeloRF_dia_2
+```  
+Se observa una disminución considerable en el porcentaje de varianza explicada por el modelo, que para el primer ajuste también era baja. Esto indica que pueden hacer falta variables dentro del ajuste que permitan alcanzar un mayor valor de varianza explicada y permitan mejores predicciones de la accidentalidad. A continuación se calcula el MSE para los conjuntos de entrenamiento y validación.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predRF_tr_d2 <- predict(modeloRF_dia_2, newdata = trainSet_dia)
+
+##métricas
+(mseTr_rf_d2 <- mse(trainSet_dia$CANTIDAD, predRF_tr_d2))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predRF_ts_d2 <- predict(modeloRF_dia_2, newdata = testSet_dia)
+
+## mse
+(mseTs_rf_d2 <- mse(testSet_dia$CANTIDAD, predRF_ts_d2))
+```
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_rf_d2 <- (abs(mseTs_rf_d2-mseTr_rf_d2)/mseTr_rf_d2)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Bosque Aleatorio entrenado con 20 árboles es de ", round(variacion_rf_d2,2), "%")
+```  
+Aunque los valores de MSE en este segundo ajuste son más alto, la diferencia entre el MSE calculado para ambos conjuntos fue más baja que la obtenida con el modelo ajustado con todas las variables. Se toma este segundo ajuste para realizar la comparación entre los tres modelos.  
+
+A continuación se presenta un resumen de los resultados obtenidos para los tres modelos.   
+
+```{r eval=FALSE}
+## RESULTADOS MODELOS AJUSTADOS
+resultados_dia <- data.frame(Modelo=c("GLM(Poisson)", "KNN", "Random Forest"),
+                             mse_train = c(mseTr_Pois_d4, mseTr_knn_d, mseTr_rf_d2),
+                             mse_test = c(mseTs_Pois_d4, mseTs_knn_d, mseTs_rf_d2),
+                             Diff_mse = c(paste0(round(variacion_Pois_d4,2),"%"), 
+                                           paste0(round(variacion_knn_d,2),"%"), 
+                                           paste0(round(variacion_rf_d2,2),"%")))
+
+resultados_dia
+```  
+
+Se observa que los valores más altos de MSE se obtuvieron para el *GLM (Poisson)*, seguido de *KNN* y *Random Forest*. Sin embargo, la diferencia entre dicho valor para ambos conjuntos aumenta, siendo *GLM (Poisson)* el que arrojó la menor diferencia y *KNN* el de mayor.  
+
+El error cuadrático para los datos de validación es bastante alto con el modelo *GLM (Poisson)*, tomando en cuenta que la cantidad máxima de accidentes de acuerdo a los filtros introducidos sería de 9, y que se tienen muchos datos únicos. Por otro lado, el modelo *KNN* muestra una diferencia de *MSE* bastante cercana al límite, por lo que es propenso a estar sobreestimado, además de que el tiempo necesario para el ajuste del modelo es un poco alto. En este caso, el mejor modelo para la predicción de la accidentalidad por días sería el modelo de **Bosque Aleatorio**, el cual no solo muestra una diferencia en el MSE bastante baja, si no que los valores calculados de MSE son bajos individualmente.  
+
+
+#### **Modelamiento de accidentalidad por semana**  
+
+Se realiza un proceso similar al hecho para los datos de accidentalidad por día, solo que ahora se excluye la variable DIA del conteo. Ya que la variable FECHAS_ESP hace referencia a un díua puntual, no tiene sentido incluirlo en esta parte del análisis.  
+
+```{r eval=FALSE}
+### conteo
+detach(package:dplyr)
+require(dplyr)
+acc_semana  <- accidentalidad %>% 
+    group_by(PERIODO, MES, SEMANA, COMUNA, BARRIO, CLASE) %>%
+    summarise(CANTIDAD = n())
+
+
+head(acc_semana)
+```  
+
+Se observa la distribución de la cantidad de accidentes por semanas.  
+
+```{r eval=FALSE}
+barplot(table(acc_semana$CANTIDAD), 
+        xlab="Cantidad de Accidentes",
+        ylab="Distribución de accidentes",
+        main = "Distribución de la cantidad de accidentes por semana")
+```  
+Nuevamente, se observa un alto número de accidentes únicos, esto debido a que el conteo se encuentra discretizado por diferentes variables. Si se observa la relación entre la accidentalidad con la variable semana.  
+
+```{r eval=FALSE}
+plot(acc_semana$SEMANA,acc_semana$CANTIDAD, 
+     xlab="Semana",
+     ylab="Cantidad de accidentes",
+     main="Accidentalidad por semana")
+```  
+No se observa un patrón definido al graficar la accidentalidad por semana. Se procede ahora a dividir los datos en entrenamiento (2014 a 2017) y prueba (datos del 2018).  
+
+```{r eval=FALSE}
+### filtramos los datos
+trainSet_sem <- subset(acc_semana, 
+                      subset = (PERIODO %in% 
+                                    c(2014,2015,2016,2017)))
+testSet_sem <- subset(acc_semana, 
+                  subset = (PERIODO %in% 2018))
+
+## dimensiones
+dim(trainSet_sem)
+dim(testSet_sem)
+```  
+Se ajustan los mismos tres modelos que se entrenaron en la sección anterior, esta vez para predecir la accidentalidad en Medellín por semana.  
+
+**Modelo lineal generalizado - Distribución Poisson**  
+
+Se ajusta el modelo con todas las variables para los datos de entrenamiento.  
+
+```{r eval=FALSE}
+## modelo con todas las variables
+modeloPois_sem <- glm(CANTIDAD~., data=trainSet_sem, family = "poisson")
+summary(modeloPois_sem)
+```  
+En este caso, la variable *SEMANA* no es significativa para el ajuste del modelo. Se observa, además, que en promedio solo la adición de los meses de febrero y marzo aporta información para el ajuste. En este caso, la mayoría de las comunas son significativas para el ajuste, como muestran sus *valores p*, además de que para la variable *BARRIO* dicho valor es bastante bajo, permitiendo rechazar la hipótesis nula.  
+
+Solo la clase INCENDIO no es significativa para el modelo. Cabe destacar que la ocurrencia de incendios es muy baja, en comparación con las otras clases de accidentes. La variable *PERIODO* tiene una influencia sobre la variable de respuesta en este caso, a diferencia del ajuste del modelo para predicción de accidentalidad por días.  
+Se realiza un segundo ajuste del modelo eliminando la columna MES para observar el comportamiento de la variable *SEMANA* respecto a la variable de respuesta.  
+
+```{r eval=FALSE}
+## se elimina MES
+modeloPois_sem2 <- glm(CANTIDAD~.-MES, data=trainSet_sem, family = "poisson")
+summary(modeloPois_sem2)
+```  
+Se observa una disminución considerable en el *valor p* calculado para la variable SEMANA en comparación con el ajuste anterior. Este valor es lo suficientemente contundente para rechazar la hipótesis nula de entrada. Además, el ajuste muestra que las otras variables son bastante significativas para el modelo, por lo que no se realizan más modificaciones.  
+
+A continuación se calcula el MSE para los datos de entrenamiento y validación con cada uno de los dos ajustes anteriores. Además se calcula el porcentaje de variación para descartar sobreentrenamiento.  
+
+```{r eval=FALSE}
+library(Metrics)
+## ajuste Poisson 1
+### train
+predPois_tr_s <- predict(modeloPois_sem, newdata = trainSet_sem)
+mseTr_Pois_s <- mse(trainSet_sem$CANTIDAD, predPois_tr_s)
+
+## test
+predPois_ts_s <- predict(modeloPois_sem, newdata = testSet_sem)
+mseTs_Pois_s <- mse(testSet_sem$CANTIDAD, predPois_ts_s)
+
+## ajuste Poisson 2
+### train
+predPois_tr_s2 <- predict(modeloPois_sem2, newdata = trainSet_sem)
+mseTr_Pois_s2 <- mse(trainSet_sem$CANTIDAD, predPois_tr_s2)
+
+## test
+predPois_ts_s2 <- predict(modeloPois_sem2, newdata = testSet_sem)
+mseTs_Pois_s2 <- mse(testSet_sem$CANTIDAD, predPois_ts_s2)
+
+
+## variaciones
+variacion_Pois_s1 <- (abs(mseTs_Pois_s-mseTr_Pois_s)/mseTr_Pois_s)*100
+variacion_Pois_s2 <- (abs(mseTs_Pois_s2-mseTr_Pois_s2)/mseTr_Pois_s2)*100
+
+
+### comparación
+### tabla comparación
+comp_poisson_s <- data.frame(Ajuste_Pois=c("Ajuste1", "Ajuste2"),
+                           MSE_train = c(mseTr_Pois_s, mseTr_Pois_s2),
+                           MSE_test = c(mseTs_Pois_s, mseTs_Pois_s2),
+                           variacion_percent = c(variacion_Pois_s1, variacion_Pois_s2))
+comp_poisson_s
+```  
+
+Se observa que el modelo se desempeña ligeramente mejor en con los datos de entrenamiento para ambos ajustes. La diferencia porcentual entre los valores calculados de MSE es menor para el segundo ajuste del modelo.  
+
+Debido a que en el segundo ajuste la variable *SEMANA* muestra cierto grado de significancia, se toma este como el modelo a comparar con el ajuste de *K vecinos cercanos* y *Random Forest* para la predicción de la accidentalidad por semana en Medellín.  
+
+**K Vecinos Cercanos**  
+
+Se selecciona un valor de $K$ óptimo de acuerdo al valor mínimo obtenido para el *MSE*. Para hacerlo se tomará una muestra del 5% de los datos de entrenamiento ya que debido a la alta dimensionalidad de los datos conllevaría un alto costo computacional el poder realizar el proceso con los datos completos.  
+
+```{r message=FALSE, eval=FALSE}
+library(caret)
+set.seed(12345)
+
+## 5% datos
+n <- dim(trainSet_sem)[1]
+trFrac_s <- sample(1:n, round(0.05*n), replace=FALSE)
+trSet_05_s <- trainSet_sem[trFrac_s,]
+
+
+## k óptimo
+trControl<-trainControl(method = "LGOCV",p=0.75,number = 15)
+modeloK_sem<-train(CANTIDAD~.,
+             data       = trSet_05_s,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = 1:100),
+             trControl  = trControl,
+             metric     = "mse")
+
+print(modeloK_sem)
+```  
+```{r eval=FALSE}
+plot(modeloK_sem)
+```  
+Según el modelo, el valor óptimo de vecinos para este escenario es de 78, sin embargo, la disminución del error no es muy pronunciada a partir de los 10 vecinos, por lo que se toma $k=20$ para realizar el ajuste del modelo.  
+
+```{r eval=FALSE}
+library(caret)
+
+## X train
+## la variable cantidad está en la posición 8
+trainX_s <- trainSet_sem[,-7]
+
+## Y train
+trainY_s <- trainSet_sem$CANTIDAD
+
+## KNN
+modeloKNN_sem <- knnreg(trainX_s,trainY_s,k=20, na.rm=TRUE)
+modeloKNN_sem
+```  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predknn_tr_s <- predict(modeloKNN_sem, trainX_s)
+
+##métricas
+library(Metrics)
+(mseTr_knn_s <- mse(trainY_s, predknn_tr_s))
+```  
+```{r eval=FALSE}
+## testX y test
+testX_s <- testSet_sem[,-7]
+testY_s <- testSet_sem$CANTIDAD
+
+
+## Predicción prueba
+predknn_ts_s <- predict(modeloKNN_sem, testX_s)
+
+##métricas
+library(Metrics)
+(mseTs_knn_s <- mse(testY_s, predknn_ts_s))
+```  
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_knn_s <- (abs(mseTs_knn_s-mseTr_knn_s)/mseTr_knn_s)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Vecinos cercanos es de ", round(variacion_knn_s,2), "%")
+```  
+Se tienen una diferencia del 23.3% entre el MSE para los datos de entrenamiento y validación. Dicha diferencia está por encima del 15% establecido como límite, por lo que en este caso hay evidencia de sobreentrenamiento del modelo. Se entrena nuevamente el modelo con $k=40$ vecinos para observar si el desempeño mejora.  
+
+```{r eval=FALSE}
+## KNN 78 vecinos
+modeloKNN_sem_2 <- knnreg(trainX_s,trainY_s,k=40, na.rm=TRUE)
+modeloKNN_sem_2
+```  
+Ahora se calcula el MSE para ambos conjuntos.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predknn_tr_s2 <- predict(modeloKNN_sem_2, trainX_s)
+
+##métricas
+library(Metrics)
+(mseTr_knn_s2 <- mse(trainY_s, predknn_tr_s2))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predknn_ts_s2 <- predict(modeloKNN_sem_2, testX_s)
+
+##métricas
+(mseTs_knn_s2 <- mse(testY_s, predknn_ts_s2))
+```  
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_knn_s2 <- (abs(mseTs_knn_s2-mseTr_knn_s2)/mseTr_knn_s2)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Vecinos cercanos es de ", round(variacion_knn_s2,2), "%")
+```  
+En este caso la diferencia entre el desempeño del modelo en los conjuntos de entrenamiento y prueba es de solo 8.51%, más bajo que el valor obtenido al ajustar el modelo con 20 vecinos y que el valor límite (15%). Los valores calculados de MSE son más altos que los obtenidos con el modelo Poisson en este caso.  
+
+Se toma este ajuste para las comparaciones con los otros dos modelos.  
+
+**Bosque Aleatorio**  
+
+Se realiza el proceso para seleccionar un número óptimo de árboles para predecir la accidentalidad por semana tomando una muestra del 10% de los datos de entrenamiento.  
+
+```{r eval=FALSE}
+library(randomForest)
+
+## muestra del 10%
+set.seed(12345)
+n <- dim(trainSet_sem)[1]
+trFrac_s <- sample(1:n, round(0.1*n), replace=FALSE)
+trSet_10_s <- trainSet_sem[trFrac_s,]
+
+
+modelo_ntree_s <- randomForest(CANTIDAD ~ ., data = trSet_10_s,
+                                    ntree = 500,importance = TRUE)
+
+oob_mse_s <- data.frame(rf_mse = modelo_ntree_s$mse,
+                      arboles = seq_along(modelo_ntree_s$mse))
+ggplot(data = oob_mse_s, aes(x = arboles, y = rf_mse )) +
+  geom_line() +
+  labs(title = "Evolución del out-of-bag-error vs número árboles",
+       x = "nº árboles") +
+  theme_bw()
+```  
+Alrededor de los 100 árboles no se observa una disminución significativa del error. Se toma este valor y se ajusta el modelo perdictivo.  
+
+```{r eval=FALSE}
+## entrenamiento Random Forest
+set.seed(12345)
+
+modeloRF_sem <- randomForest(CANTIDAD~., data=trainSet_sem, ntree=100)
+modeloRF_sem
+```  
+El modelo ajustado con 100 árboles explica un 59.59% de la varianza, puede que hagan falta variables para poder aumentar el porcentaje de varianza explicada por el modelo. Se realiza ahora la predicción para los conjuntos de entrenamiento y prueba y se calcula el MSE.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predRF_tr_s <- predict(modeloRF_sem, newdata = trainSet_sem)
+
+##métricas
+library(Metrics)
+(mseTr_rf_s <- mse(trainSet_sem$CANTIDAD, predRF_tr_s))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predRF_ts_s <- predict(modeloRF_sem, newdata = testSet_sem)
+
+## mse
+(mseTs_rf_s <- mse(testSet_sem$CANTIDAD, predRF_ts_s))
+```
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_rf_s <- (abs(mseTs_rf_s-mseTr_rf_s)/mseTr_rf_s)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Bosque Aleatorio entrenado con 150 árboles es de ", round(variacion_rf_s,2), "%")
+```  
+La diferencia entre el MSE para ambos conjuntos está por encima del límite (15%), indicando que el modelo ajustado con todas las variables está sobreentrenado. El modelo se desempeña mejor para el conjunto de entrenamiento. Además, los valores de MSE son más bajos que los obtenidos para el método de Vecinos Cercanos.  
+
+Se observa la importancia de las variables en el ajuste.  
+
+```{r eval=FALSE}
+## importancia
+varImpPlot(modeloRF_sem)
+```  
+En este caso las variables *MES* y *PERIODO* son las de menor importancia. Se procede a realizar un segundo ajuste sin contar estas variables para observar el desempeño del modelo de Bosque Aleatorio.  
+
+```{r eval=FALSE}
+## entrenamiento Random Forest sin PERIODO y MES
+set.seed(12345)
+
+modeloRF_sem_2 <- randomForest(CANTIDAD~.-PERIODO-MES, data=trainSet_sem, ntree=100)
+modeloRF_sem_2
+```  
+Este ajuste explica un 41.21% de la varianza, menos que el ajuste anterior. Se procede a calcular su desempeño con los conjuntos de entrenamiento y prueba calculando el MSE.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predRF_tr_s2 <- predict(modeloRF_sem_2, newdata = trainSet_sem)
+
+##métricas
+(mseTr_rf_s2 <- mse(trainSet_sem$CANTIDAD, predRF_tr_s2))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predRF_ts_s2 <- predict(modeloRF_sem_2, newdata = testSet_sem)
+
+## mse
+(mseTs_rf_s2 <- mse(testSet_sem$CANTIDAD, predRF_ts_s2))
+```
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_rf_s2 <- (abs(mseTs_rf_s2-mseTr_rf_s2)/mseTr_rf_s2)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Bosque Aleatorio sin la variable PERIODO es de ", round(variacion_rf_s2,2), "%")
+```  
+En este caso la diferencia entre el MSE obtenido para los conjuntos de entrenamiento y validación es de solo 6.46%, más bajo que el obtenido para el ajuste anterior. Se toma este ajuste para comparar con los mejores ajustes de los otros dos modelos, ya que la eliminación de las dos variables redujo signficativamente la diferencia de MSE.  
+
+A continuación se presenta una tabla con los resultados de los ajustes para los tres modelos.  
+
+```{r eval=FALSE}
+## data
+resultados_sem <- data.frame(Modelo=c("GLM(Poisson)", "KNN", "Random Forest"),
+                             mse_train = c(mseTr_Pois_s2, mseTr_knn_s2, mseTr_rf_s2),
+                             mse_test = c(mseTs_Pois_s2, mseTs_knn_s2, mseTs_rf_s2),
+                             Diff_mse = c(paste0(round(variacion_Pois_s2,2),"%"), 
+                                           paste0(round(variacion_knn_s2,2),"%"), 
+                                           paste0(round(variacion_rf_s2,2),"%")))
+
+resultados_sem
+```  
+
+El MSE obtenido para ambos conjuntos con *GLM(Poisson)* es el más alto. Sin embargo, la diferencia entre ambos valores fue baja (1.54%) en comparación a la obtenida con los otros modelos. Los valores más bajos de MSE se obtuvieron para el modelo de *Bosque Aleatorio*, el cual se selecciona para realizar la predicción de la accidentalidad por semana en Medellín.  
+
+
+#### **Modelamiento de accidentalidad por mes**    
+
+Por último, se procede a entrenar un modelo para predecir la accidentalidad por mes. Se crea la tabla al igual que en los casos anteriores y se particionan los datos en los conjuntos de entrenamiento y validación.  
+
+```{r eval=FALSE}
+### conteo
+detach(package:dplyr)
+require(dplyr)
+acc_mes  <- accidentalidad %>% 
+    group_by(PERIODO, MES, COMUNA, BARRIO, CLASE) %>%
+    summarise(CANTIDAD = n())
+
+
+head(acc_mes)
+```  
+
+```{r eval=FALSE}
+### filtramos los datos
+trainSet_mes <- subset(acc_mes, 
+                      subset = (PERIODO %in% 
+                                    c(2014,2015,2016,2017)))
+testSet_mes <- subset(acc_mes, 
+                  subset = (PERIODO %in% 2018))
+
+## dimensiones
+dim(trainSet_mes)
+dim(testSet_mes)
+```  
+
+Se observa cómo está distribuída la accidentalidad en este caso.  
+
+```{r eval=FALSE}
+barplot(table(acc_mes$CANTIDAD),
+        xlab="Cantidad de Accidentes",
+        ylab="Distribución de accidentes",
+        main = "Distribución de la cantidad de accidentes por mes")
+```  
+La mayoría de los accidentes en la tabla son únicos, debido a que estos se discretizan por diferentes variables, sin embargo, se puede observar que la ocurrencia de accidentes varía entre 1 y 64 en esta ocasión, sebido a que la resolución temporal es mayor.  
+
+
+**Modelo lineal generalizado - Distribución Poisson**  
+
+Se procede a entrenar el modelo con todas las variables inicialmente.  
+
+```{r eval=FALSE}
+modeloPois_mes <- glm(CANTIDAD~., data=trainSet_mes, family = "poisson")
+summary(modeloPois_mes)
+```  
+Para este modelo, salvo la COMUNA13 y la clase de accidente "Otro", todas las variables son significativas, con *valores p* lo suficientemente bajos para poder rechazar la hipótesis nula y poder concluir que cada variable aporta información. Sin embargo, el PERIODO parace no ser muy significativo para el modelo. Se ajusta un segundo modelo sin contar dicha variable.  
+
+```{r eval=FALSE}
+modeloPois_mes_2 <- glm(CANTIDAD~.-PERIODO, data=trainSet_mes, family = "poisson")
+summary(modeloPois_mes_2)
+``` 
+
+Se observa una mejora en la interacción de las variables predictoras con la variable de respuesta para este segundo ajuste. Se toma el ajuste y se calcula el MSE para los datos de entrenamiento y prueba.   
+
+Se procede a realizar la predicción y realizar del MSE para los datos de entrenamiento y validación.  
+```{r eval=FALSE}
+### predicción entrenamiento. 
+predPois_tr_m <- predict(modeloPois_mes_2, newdata = trainSet_mes)
+
+## mse
+(mseTr_Pois_m <- mse(trainSet_mes$CANTIDAD, predPois_tr_m))
+```  
+
+```{r eval=FALSE}
+## predicción prueba
+predPois_ts_m <- predict(modeloPois_mes_2, newdata = testSet_mes)
+
+## mse
+(mseTs_Pois_m <- mse(testSet_mes$CANTIDAD, predPois_ts_m))
+```
+Se calcula la diferencia porcentual entre ambos resultados.  
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_Pois_m <- (abs(mseTs_Pois_m-mseTr_Pois_m)/mseTr_Pois_m)*100
+
+paste0("La variación entre los mse calculados para los datos entrenamiento y prueba con el GLM con distribución Poisson es de ", round(variacion_Pois_m,2), "%")
+```  
+La diferencia obtenida para los MSE en entrenamiento y prueba es mucho menor que el valor límite (15%). El ajuste realizado en este caso no sufre de sobreentrenamiento. Sin embargo, los valores de MSE obtenidos para el ajuste son bastante altos.  
+
+**K Vecinos Cercanos**  
+
+Se selecciona un valor de $K$ óptimo de acuerdo al valor mínimo obtenido para el *rmse*. Para hacerlo se tomará una muestra del 10% de los datos de entrenamiento ya que debido a la alta dimensionalidad de los datos conllevaría un alto costo computacional el poder realizar el proceso con los datos completos.  
+
+```{r message=FALSE, eval=FALSE}
+library(caret)
+set.seed(12345)
+
+## 5% datos
+n <- dim(trainSet_mes)[1]
+trFrac_m <- sample(1:n, round(0.1*n), replace=FALSE)
+trSet_10_m <- trainSet_mes[trFrac_m,]
+
+
+## k óptimo
+trControl<-trainControl(method = "LGOCV",p=0.75,number = 15)
+modeloK_mes<-train(CANTIDAD~.,
+             data       = trSet_10_m,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = 1:50),
+             trControl  = trControl,
+             metric     = "rmse")
+
+print(modeloK_mes)
+```  
+
+```{r eval=FALSE}
+plot(modeloK_mes)
+```   
+El comportamiento del rmse en este caso es distinto al obtenido para los ajustes realizado para las predicciones de accidentalidad por día y semana. En este caso, el error aumenta a medida que incrementa el número de vecinos y se encuentra que el k óptimo es $k=2$. Sin embargo, al entrenar el modelo con dicho valor no se obtuvieron resultados concluyentes, por lo que se optó por utilizar un $k=40$ para entrenar el modelo como sigue, ya que con este valor se logra que el error esté por debajo del 15%.  
+
+```{r eval=FALSE}
+library(caret)
+
+## X train
+## la variable cantidad está en la posición 7
+trainX_m <- trainSet_mes[,-6]
+
+## Y train
+trainY_m <- trainSet_mes$CANTIDAD
+
+## KNN
+modeloKNN_mes <- knnreg(trainX_m,trainY_m,k=40, na.rm=TRUE)
+modeloKNN_mes
+```  
+Se realiza la predicción para los datos de entrenamiento y se calcula el MSE  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predknn_tr_m <- predict(modeloKNN_mes, trainX_m)
+
+##métricas
+library(Metrics)
+(mseTr_knn_m <- mse(trainY_m, predknn_tr_m))
+```  
+Para prueba.  
+
+```{r eval=FALSE}
+## testX y testY
+testX_m <- testSet_mes[,-6]
+testY_m <- testSet_mes$CANTIDAD
+
+
+## Predicción prueba
+predknn_ts_m <- predict(modeloKNN_mes, testX_m)
+
+##métricas
+library(Metrics)
+(mseTs_knn_m <- mse(testY_m, predknn_ts_m))
+```  
+Se calcula la diferencia porcentual.  
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_knn_m <- (abs(mseTs_knn_m-mseTr_knn_m)/mseTr_knn_m)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Vecinos cercanos es de ", round(variacion_knn_m,2), "%")
+```    
+El desempeño del modelo en la predicción es mejor para el conjunto de entrenamiento. Los valores obtenidos para el MSE calculado para los conjuntos de entrenamiento y validación son mayores a los obtenidos para el modelo anterior. Sin embargo, la diferencia entre ambos (12.57%) permanece por debajo del límite, por lo que no se sufre de sobreentrenamiento en este caso.  
+
+**Bosque Aleatorio**  
+
+Se realiza el proceso para seleccionar un número óptimo de árboles para predecir la accidentalidad por mes tomando una muestra del 10% de los datos de entrenamiento.  
+
+```{r eval=FALSE}
+library(randomForest)
+
+## muestra del 10%
+set.seed(12345)
+n <- dim(trainSet_mes)[1]
+trFrac_m <- sample(1:n, round(0.1*n), replace=FALSE)
+trSet_10_m <- trainSet_mes[trFrac_m,]
+
+
+modelo_ntree_m <- randomForest(CANTIDAD ~ ., data = trSet_10_m,
+                                    ntree = 500,importance = TRUE)
+
+oob_mse_m <- data.frame(rf_mse = modelo_ntree_m$mse,
+                      arboles = seq_along(modelo_ntree_m$mse))
+ggplot(data = oob_mse_m, aes(x = arboles, y = rf_mse )) +
+  geom_line() +
+  labs(title = "Evolución del out-of-bag-error vs número árboles",
+       x = "nº árboles") +
+  theme_bw()
+```   
+Para este modelo se observa que a partir de 100 árboles el error comienza a variar muy poco, por lo que se toma este valor para el ajuste del modelo de predicción de la accidentalidad por mes.  
+
+```{r eval=FALSE}
+## entrenamiento Random Forest
+set.seed(12345)
+
+modeloRF_mes <- randomForest(CANTIDAD~., data=trainSet_mes, ntree=100)
+modeloRF_mes
+```  
+El ajuste del modelo con 100 árboles explica el 68.07% de la varianza. A continuación se calcula el MSE para los datos de entrenamiento y prueba para este ajuste.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predRF_tr_m <- predict(modeloRF_mes, newdata = trainSet_mes)
+
+##métricas
+library(Metrics)
+(mseTr_rf_m <- mse(trainSet_mes$CANTIDAD, predRF_tr_m))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predRF_ts_m <- predict(modeloRF_mes, newdata = testSet_mes)
+
+## mse
+(mseTs_rf_m <- mse(testSet_mes$CANTIDAD, predRF_ts_m))
+```
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_rf_m <- (abs(mseTs_rf_m-mseTr_rf_m)/mseTr_rf_m)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Bosque Aleatorio entrenado con 100 árboles es de ", round(variacion_rf_m,2), "%")
+```   
+La diferencia entre el MSE calculado para los conjuntos de entrenamiento y prueba es más alta que el valor límite, por lo que este ajuste se encuentra sobreentrenado. Se observa a continuación la importancia de las variables para este modelo.  
+
+```{r eval=FALSE}
+## importance
+varImpPlot(modeloRF_mes)
+```  
+En este caso las variables de menor importancia son MES y PERIODO. Se ajusta a continuación un modelo eliminando la variable PERIODO, para observar su desempeño.  
+
+```{r eval=FALSE}
+## entrenamiento Random Forest sin PERIODO
+set.seed(12345)
+
+modeloRF_mes_2 <- randomForest(CANTIDAD~.-PERIODO, data=trainSet_mes, ntree=100)
+modeloRF_mes_2
+```  
+
+El ajuste en este caso explica 55.54% de la varianza, mayor que el ajuste anterior. Se observa el MSE para los conjuntos de entrenamiento y prueba.  
+
+```{r eval=FALSE}
+## Predicción entrenamiento.
+predRF_tr_m2 <- predict(modeloRF_mes_2, newdata = trainSet_mes)
+
+##métricas
+(mseTr_rf_m2 <- mse(trainSet_mes$CANTIDAD, predRF_tr_m2))
+```  
+
+```{r eval=FALSE}
+## Predicción prueba
+predRF_ts_m2 <- predict(modeloRF_mes_2, newdata = testSet_mes)
+
+## mse
+(mseTs_rf_m2 <- mse(testSet_mes$CANTIDAD, predRF_ts_m2))
+```
+
+```{r eval=FALSE}
+### Porcentaje
+variacion_rf_m2 <- (abs(mseTs_rf_m2-mseTr_rf_m2)/mseTr_rf_m2)*100
+
+paste0("La variación entre los mse de entrenamiento y prueba para el modelo de Bosque Aleatorio sin la variable PERIODO es de ", round(variacion_rf_m2,2), "%")
+```   
+En este caso la variación del MSE para los conjuntos de entrenamiento y prueba  es de solo 3.08%, además de que los valores calculados de MSE son menores que los obtenidos para el primer ajuste. Se tiene entonces que esta diferencia se encuentra por debajo del límite, por lo que se toma este ajuste como el modelo final de *Bosque Aleatorio*.  
+
+A continuación se presenta una tabla con los resultados de los ajustes para los tres modelos.  
+
+```{r eval=FALSE}
+## data
+resultados_mes <- data.frame(Modelo=c("GLM(Poisson)", "KNN", "Random Forest"),
+                             mse_train = c(mseTr_Pois_m, mseTr_knn_m, mseTr_rf_m2),
+                             mse_test = c(mseTs_Pois_m, mseTs_knn_m, mseTs_rf_m2),
+                             Diff_mse = c(paste0(round(variacion_Pois_m,2),"%"), 
+                                           paste0(round(variacion_knn_m,2),"%"), 
+                                           paste0(round(variacion_rf_m2,2),"%")))
+
+resultados_mes
+```  
+
+Los valores más bajos de MSE se obtuvieron con el modelo **Random Forest**, que presentó un *MSE* más bajo que para los dos modelos anteriores. Se tomará como el modelo para predecir la accidentalidad por mes en la aplicación de Shiny.   
+
+
+#### **Función para simulación de conjunto de datos**  
+
+A continuación se procede a construir una función para generar un conjunto de datos con las variables MES, SEMANA, DIA_ANNO, COMUNA, BARRIO, CLASE y FECHAS_ESP a partir de  in intervalo y resolución temporal como entrada.  
+
+```{r eval=FALSE}
+### Función para predecir accidentalidad para un intervalo de tiempo
+### La función toma el intervalo introducido y crea un data frame con las columnas
+### FECHA, MES, SEMANA, DIA, COMUNA, BARRIO, CLASE y FECHAS_ESP
+### Necesarias para predecir la accidentalidad por mes, semana o día
+
+
+### se debe introducir ventana de tiempo en formato año/mes/dia
+### resolución temporal: mes, semana, dia
+
+acc_function <- function(Fecha_inicial, Fecha_final, resolucion_temp) {
+        
+  
+        ### Librerías necesarias  
+        library(stringi)
+        library(lubridate)
+        library(dplyr)
+        library(plyr)
+        #set.seed(12345)
+        
+        ### función que recibe fecha como entrada y la generaliza
+        resolucion_temp <- tolower(resolucion_temp)
+        freq_date = ifelse(resolucion_temp=="mes", "month", 
+                           ifelse(resolucion_temp=="semana", "week", "day"))
+        
+        M <- seq(as.Date(Fecha_inicial), as.Date(Fecha_final), by=freq_date) 
+        
+        ## copiamos data requerida de dataframe df
+        df2 <- select(accidentalidad, COMUNA, BARRIO, CLASE)
+
+        ## se distribuyen las comunas y barrios para cada día del rango
+        ## Para esto toca hacer un proceso iterativo ya que los barrios
+        ## también son diferentes para cada comuna
+        ## de igual forma se distribuyen las clases de accidente de acuerdo a la
+        ## proporción de accidentes de cada comuna
+        
+        data_for_prediction <- data.frame()
+        h = 0  ## contador
+        ah=0   ## contador
+        
+        for (i in 1:(length(unique(df2$COMUNA)))) {
+          
+              ## filtro comuna i 
+              comuna_filter <- subset(df2, COMUNA==unique(df2$COMUNA)[i])
+              
+              ## rango de fechas
+              dates_range <- sort(rep(M, length(unique(comuna_filter$BARRIO))))
+              
+              
+              ## filtro de barrios
+              prob_bar <- table(comuna_filter$BARRIO)/length(comuna_filter$BARRIO) ## probabilidad accidentalidad barrio
+              
+              barrio0 <- sample(sort(unique(comuna_filter$BARRIO)), 
+                               length(dates_range), replace = TRUE,
+                                prob = prob_bar)
+              
+              
+              
+              ## filtro para clase
+              prob_clas <- table(comuna_filter$CLASE)/length(comuna_filter$CLASE)  ## probabilidad de cada clase
+              prob_clas <- prob_clas[which(prob_clas>0)]
+              clases_acc <- sample(sort(unique(comuna_filter$CLASE)), length(dates_range), 
+                                 replace=TRUE, prob = prob_clas) ## se asignan las clases con su probabilidad
+            
+            for (j in 1:length(dates_range)) {
+              data_for_prediction[j+h, "FECHA"] <- dates_range[j]
+              data_for_prediction[j+h,"COMUNA"] <- comuna_filter$COMUNA[1]
+              data_for_prediction[j+h,"BARRIO"] <- barrio0[j]
+              data_for_prediction[j+h,"CLASE"] <- clases_acc[j]
+              
+              ah = ah+1
+            }
+            
+            h = h+ah
+            ah=0
+            
+
+        }
+        
+        ## BALANCEO DE LOS DATOS
+        ### se debe hacer para que la dimensión de los conjuntos simulados para
+        ### dias, mes, y año sea lo más cercana a la de los datos reales de accidentalidad
+        ### por año, y la predicción no de valores muy desfasados.  
+        
+        n <- dim(data_for_prediction)[1]
+        
+        if (resolucion_temp=="dia") {
+          frac <- sample(1:n, 0.33*n, replace=TRUE)
+          data_for_prediction <- data_for_prediction[frac,]
+          
+        } else {
+          if (resolucion_temp=="semana") {
+            frac <- sample(1:n, 0.28*n, replace=TRUE)
+            data_for_prediction1 <- data_for_prediction
+            data_for_prediction2 <- data_for_prediction[frac,]
+            data_for_prediction <- rbind(data_for_prediction1, data_for_prediction2)
+            
+          } else {
+            frac <- sample(1:n, 0.32*n, replace=TRUE)
+            frac1 <- sample(1:n, 1.73*n, replace=TRUE)
+            
+            data_for_prediction1 <- data_for_prediction
+            data_for_prediction2 <- data_for_prediction[frac,]
+            
+            data_for_prediction3 <- subset(data_for_prediction, CLASE %in% c(1,2,4,5))
+            data_for_prediction3 <- data_for_prediction3[frac1, ]
+              
+              
+            data_for_prediction <- rbind(data_for_prediction1, 
+                                         data_for_prediction2,
+                                         data_for_prediction3)
+          }
+        }
+
+        ## se ordena por fecha
+        data_for_prediction <- subset(data_for_prediction, CLASE %in% c(1,2,3,4,5))
+        data_for_prediction <- data_for_prediction[order(data_for_prediction$FECHA),]
+        
+        
+        ############## PARTE 2 ####################################
+        ## Se adecuan los datos
+        
+        ## nombre del día
+        data_for_prediction$DIA_NOMBRE <- weekdays(data_for_prediction$FECHA)
+        data_for_prediction$DIA_NOMBRE <- toupper(stri_trans_general(data_for_prediction$DIA_NOMBRE,"Latin-ASCII"))
+        
+        ## fechas especiales
+        data_for_prediction$FECHAS_ESP1 <- ifelse(data_for_prediction$DIA_NOMBRE %in% c("SABADO","DOMINGO"), "NO LABORAL", "LABORAL")
+        data_for_prediction$FECHAS_ESP <- ifelse(data_for_prediction$FECHA %in% festivos$FECHA, "FESTIVO", data_for_prediction$FECHAS_ESP1)
+        
+        ## dia, semana, mes, periodo
+        data_for_prediction$DIA_ANNO <- yday(data_for_prediction$FECHA)
+        data_for_prediction$SEMANA <- week(data_for_prediction$FECHA)
+        data_for_prediction$MES <- month(data_for_prediction$FECHA)
+        data_for_prediction$PERIODO <- year(data_for_prediction$FECHA)
+        
+        
+        ## variables a factores
+        data_for_prediction$MES <- as.factor(data_for_prediction$MES)
+        
+        ## niveles
+        levels(data_for_prediction$FECHAS_ESP) <- levels(accidentalidad$FECHAS_ESP)
+        levels(data_for_prediction$CLASE) <- levels(accidentalidad$CLASE)
+        levels(data_for_prediction$COMUNA) <- levels(accidentalidad$COMUNA)
+        levels(data_for_prediction$MES) <- levels(accidentalidad$MES)
+        
+        ## SEMANA a numéricas
+        data_for_prediction$SEMANA <- as.numeric(data_for_prediction$SEMANA)
+        
+        ## nombre de las clases
+        data_for_prediction$CLASE_TEXT <- ifelse(data_for_prediction$CLASE==1, "ATROPELLO",
+                                                 ifelse(data_for_prediction$CLASE==2, "CAIDA OCUPANTE",
+                                                      ifelse(data_for_prediction$CLASE==3, "CHOQUE",
+                                                        ifelse(data_for_prediction$CLASE==4, "OTRO",
+                                                        "VOLCAMIENTO"))))
+        
+        ## data final
+        data_for_prediction <- select(data_for_prediction, FECHA, PERIODO, MES, FECHAS_ESP, CLASE_TEXT,
+                                      SEMANA, DIA_ANNO, COMUNA, BARRIO, CLASE)
+        
+        data_for_prediction
+                
+}
+
+```  
+
+
+#### **Función para predicción de accidentalidad**  
+
+
+Ahora se crea una función que toma como entrada un conjunto de datos y resolución temporal para realizar la predicción de accidentalidad.  
+
+```{r eval=FALSE}
+## Función para predicción 
+##a esta función se le indican los datos y la resolución para la que se quiere predecir
+
+pred_function <- function(datos, resolucion_temp) {
+  
+  library(randomForest)
+  
+  resolucion_temp <- tolower(resolucion_temp)
+  modelo_pred <- ifelse(resolucion_temp=="mes", 3, 
+                        ifelse(resolucion_temp=="semana", 2, 1))
+  
+  if (modelo_pred == 1) {
+    new_pred <- predict(modeloRF_dia_2, newdata=datos)
+    new_pred <- ifelse(new_pred<=0, 0, new_pred)
+    datos$PRED <- round(new_pred)
+    salida = datos[,c("FECHA", "CLASE_TEXT", "PRED")]
+    
+  } else {
+    
+    if (modelo_pred == 2) {
+      new_pred <- predict(modeloRF_sem_2, newdata=datos)
+      new_pred <- ifelse(new_pred<=0, 0, new_pred)
+      #new_pred <- abs(new_pred)
+      datos$PRED <- round(new_pred)
+      salida = datos[,c("SEMANA", "CLASE_TEXT", "PRED")]
+      
+    } else {
+      
+      new_pred <- predict(modeloRF_mes_2, newdata=datos)
+      new_pred <- ifelse(new_pred<0, 0, new_pred)
+      #new_pred <- abs(new_pred)
+      datos$PRED <- round(new_pred)
+      salida = datos[,c("MES", "CLASE_TEXT","PRED")]
+    }
+  }
+  
+  
+  ## salida
+  library(reshape2)
+  library(dplyr)
+  
+  if (resolucion_temp == "dia") {
+      predicciones <- dcast(salida, FECHA~CLASE_TEXT, value.var="PRED", fun.aggregate = sum)
+  } else {
+    if (resolucion_temp == "semana") {
+      predicciones <- dcast(salida, SEMANA~CLASE_TEXT, value.var="PRED", fun.aggregate = sum)
+    } else {
+      predicciones <- dcast(salida, MES~CLASE_TEXT, value.var="PRED", fun.aggregate = sum)
+    }
+  }
+  
+  predicciones
+  
+}
+```  
+
+Se comprueba el funcionamiento de las funciones anteriores.  
+
+```{r eval=FALSE}
+data_in <- acc_function("2018/1/1", "2018/1/31", "mes")
+
+
+## prediction 1
+predicciones <- pred_function(data_in, "mes")
+predicciones
+```  
+
+```{r eval=FALSE}
+### valores reales
+subdia <- subset(trainSet_sem, PERIODO==2017)
+dcast(testSet_mes, MES~CLASE, value.var="CANTIDAD", fun.aggregate = sum)
+```  
+
+#### **Creación de Conjunto de Datos para Agrupamiento**  
+
+
+```{r eval=FALSE}
+## conjunto de datos
+detach(package:dplyr)
+library(dplyr)
+acc_barrio <- df %>% 
+              group_by(FECHA, COMUNA, BARRIO, DIA_NOMBRE, MES_NOMBRE, FECHAS_ESP) %>%
+              summarise(CANTIDAD=n())
+
+head(acc_barrio)
+```  
+
+```{r eval=FALSE}
+### conteo de accidentes por barrio
+prom_acc.barrio <- acc_barrio %>% 
+  group_by(BARRIO) %>%
+  summarise(PROM_ACCIDENTES=mean(CANTIDAD))
+
+prom_acc.barrio
+```
+
+```{r eval=FALSE}
+## se calcula la distribución de accidentes por comuna
+## proporción de acidentes de la comuna que corresponden al barrio específico
+
+## primero se calcula el total de accidentes por barrio y comuna
+acc.comuna_barrio <- acc_barrio %>% 
+  group_by(COMUNA, BARRIO) %>%
+  summarise(Total_acc_barrio=sum(CANTIDAD))
+
+## se calcula el total de accidentes de cada comuna
+total_acc_comuna <-  acc_barrio %>% 
+  group_by(COMUNA) %>%
+  summarise(Acc_comuna=sum(CANTIDAD))
+
+## se cancula la proporción de accidentes por barrio
+prop.acc_barrio <- data.frame()
+
+h=0
+ah=0
+
+for (i in 1:dim(total_acc_comuna)[1]) {
+  
+  acc_comuna <- subset(acc.comuna_barrio, COMUNA==total_acc_comuna$COMUNA[i])
+  
+  for (j in 1:dim(acc_comuna)[1]) {
+      prop.acc_barrio[j+h,"BARRIO"] = acc_comuna$BARRIO[j]
+      prop.acc_barrio[j+h,"PROP_ACCIDENTES"] = acc_comuna$Total_acc_barrio[j]/total_acc_comuna$Acc_comuna[i]
+      ah = ah+1
+  }
+  
+  h = h+ah
+  ah = 0
+}
+
+## resultado
+prop.acc_barrio
+```
+
+```{r eval=FALSE}
+### día de semana con más accidentes por barrio
+max.week_day_barrio <- acc_barrio %>% 
+  group_by(BARRIO, DIA_NOMBRE) %>%
+  summarise(max_accidentes=sum(CANTIDAD))
+
+
+max.week_day_barrio2 <- data.frame()
+## iterando
+barrios1 <- unique(max.week_day_barrio$BARRIO)
+for (i in 1:length(barrios1)) {
+  sub_acc <- subset(max.week_day_barrio, BARRIO==barrios1[i])
+  max_acc <- which(sub_acc$max_accidentes == max(sub_acc$max_accidentes))[1]
+  
+  max.week_day_barrio2[i, "BARRIO"] <- sub_acc$BARRIO[max_acc]
+  max.week_day_barrio2[i, "DIA_NOMBRE"] <- sub_acc$DIA_NOMBRE[max_acc]
+}
+
+## nombre del día a factor
+max.week_day_barrio2$DIA_NOMBRE <- factor(max.week_day_barrio2$DIA_NOMBRE,
+                                          levels = c("LUNES", "MARTES",
+                                                     "MIERCOLES", "JUEVES", 
+                                                     "VIERNES", "SABADO", "DOMINGO"))
+
+## nombre del día numérico
+max.week_day_barrio2$DIA_NOMBRE <- as.numeric(max.week_day_barrio2$DIA_NOMBRE)
+
+## resultado
+max.week_day_barrio2
+```
+
+```{r eval=FALSE}
+## tasa accidentes día laboral
+tasa_acc_lab <- subset(acc_barrio, FECHAS_ESP == "LABORAL")
+
+tasa_acc_lab <- tasa_acc_lab %>%
+  group_by(BARRIO) %>%
+  summarise(ACC_DIA_LABORAL = sum(CANTIDAD))
+
+tasa_acc_lab
+```
+
+```{r eval=FALSE}
+## tasa accidentes día NO laboral
+tasa_acc_noLab <- subset(acc_barrio, FECHAS_ESP %in% c("NO LABORAL", "FESTIVO"))
+
+tasa_acc_noLab <- tasa_acc_noLab %>%
+  group_by(BARRIO) %>%
+  summarise(ACC_DIA_NoLABORAL = sum(CANTIDAD))
+
+tasa_acc_noLab
+```  
+
+Se unen los datos en un mismo conjunto.  
+
+```{r eval=FALSE}
+## se unen los datos en uno
+detach(package:plyr)
+library(plyr)
+data_clustering <- join_all(list(prom_acc.barrio, prop.acc_barrio, max.week_day_barrio2, tasa_acc_lab, tasa_acc_noLab))
+data_clustering
+```
+
+
+
+

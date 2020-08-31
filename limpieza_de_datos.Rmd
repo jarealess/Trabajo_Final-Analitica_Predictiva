@@ -1,0 +1,211 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r echo=FALSE}
+# - Librerias
+library(dplyr)
+library(stringi)
+library(lubridate)
+library(reshape)
+library(RColorBrewer)
+library(randomForest)
+```
+
+## Fuente de datos
+
+Para la realización de este trabajo se utilizaron las bases de datos de accidentalidad alojadas en el portal [GeoMedellín](https://geomedellin-m-medellin.opendata.arcgis.com/datasets?t=movilidad) consultadas y descargadas el viernes 30 de julio de 2020. Las bases de datos se descargaron en archivos individuales correspondientes a los años 2014 - 2018.
+
+```{r echo=FALSE}
+# - Se cargan los archivos
+bd_2014 <- read.csv("Bases_de_Datos_Fuente/Accidentalidad_georreferenciada_2014.csv", header = TRUE, sep  = ",", encoding = 'UTF-8')
+bd_2015 <- read.csv("Bases_de_Datos_Fuente/Accidentalidad_georreferenciada_2015.csv", header = TRUE, sep  = ",", encoding = 'UTF-8')
+bd_2016 <- read.csv("Bases_de_Datos_Fuente/Accidentalidad_georreferenciada_2016.csv", header = TRUE, sep  = ",", encoding = 'UTF-8')
+bd_2017 <- read.csv("Bases_de_Datos_Fuente/Accidentalidad_georreferenciada_2017.csv", header = TRUE, sep  = ",", encoding = 'UTF-8')
+bd_2018 <- read.csv("Bases_de_Datos_Fuente/Accidentalidad_georreferenciada_2018.csv", header = TRUE, sep  = ",", encoding = 'UTF-8')
+
+# - Unimos los bd en un solo df
+df <- do.call("rbind", list(bd_2014, bd_2015, bd_2016, bd_2017, bd_2018))
+
+# - Eliminamos las bd que ya no se utilizaran
+rm(bd_2014, bd_2015, bd_2016, bd_2017, bd_2018)
+
+```
+
+Posterior a la carga de cada una de las bases de datos, se decide unificar en una sola base de datos y observamos que tenemos una base de datos con `r dim(df)[1]` **filas** y `r dim(df)[2]` **columnas.**
+
+Visualización de los primeros registros:
+
+```{r}
+# - visualizamos las primeras observaciones del archivo unificado
+head(df)
+```
+
+```{r}
+##  echo=FALSE, results='hide'
+# - Visualializamos el nombre de las columnas o variables
+names(df)
+```
+
+```{r}
+# - Visualizamos sus características
+str(df)
+```
+
+## Depuración de la base de datos unificada
+
+Tras la exploración inicial de los datos, se identifican las principales acciones a realizar para depurar la base de datos:
+
+- Eliminación de columnas repetidas.
+- Eliminación de columnas que no aportan a los objetivos del trabajo.
+
+```{r}
+# - Eliminación de columnas queno se utilizarán
+df <- select(df, -(X.U.FEFF.X:RADICADO), -HORA, -(DIRECCION:TIPO_GEOCOD), -DISENO, -X_MAGNAMED, -Y_MAGNAMED)
+```
+
+- Corrección y transformación de las variables asociadas a la fecha de los accidentes.
+
+```{r echo=FALSE}
+# - Corrección de fechas
+df$FECHA <- substr(df$FECHA, 1, 10)
+df$FECHA <- as.Date(df$FECHA, format = "%Y/%m/%d")
+
+# - Eliminamos espacios en blanco de la variable DIA_NOMBRE
+df$DIA_NOMBRE <- gsub(pattern = "(^ +| +$)", replacement = "", x = df$DIA_NOMBRE)
+
+# - Diligenciamos el nombre del mes
+df$MES_NOMBRE <-ifelse(df$MES == 1, "ENERO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 2, "FEBRERO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 3, "MARZO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 4, "ABRIL", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 5, "MAYO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 6, "JUNIO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 7, "JULIO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 8, "AGOSTO", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 9, "SEPTIEMBRE", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 10, "OCTUBRE", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 11, "NOVIEMBRE", df$MES_NOMBRE)
+df$MES_NOMBRE <-ifelse(df$MES == 12, "DICIEMBRE", df$MES_NOMBRE)
+
+# - Creamos una nueva columna para identificar la semana del mes
+df$SEMANA <- week(df$FECHA)
+
+# - Pasamos los datos a numéricos
+df$DIA <- as.numeric(df$DIA)
+df$MES <- as.numeric(df$MES)
+df$PERIODO <- as.numeric(df$PERIODO)
+```
+
+- Normalización de los datos de tipo carácter (eliminación de tíldes, convertir todo en mayúsculas y homologar nombres)
+
+```{r echo=FALSE}
+# - Quitar tílder y convertir a mayúsculas
+df$DIA_NOMBRE <- toupper(stri_trans_general(df$DIA_NOMBRE,"Latin-ASCII"))
+df$COMUNA <- toupper(stri_trans_general(df$COMUNA,"Latin-ASCII"))
+df$BARRIO <- toupper(stri_trans_general(df$BARRIO,"Latin-ASCII"))
+df$CLASE <- toupper(stri_trans_general(df$CLASE,"Latin-ASCII"))
+```
+
+```{r echo=FALSE}
+# - Normalizamos los valores de la variable CLASE
+df$CLASE <- ifelse (df$CLASE == "", "OTRO", df$CLASE)
+df$CLASE <- gsub("CAIDA DE OCUPANTE", "CAIDA OCUPANTE", df$CLASE, fixed = TRUE)
+df$CLASE <- gsub("CHOQUE Y ATROPELLO", "CHOQUE", df$CLASE, fixed = TRUE)
+df$CLASE <- gsub("CHOQUE ", "CHOQUE", df$CLASE, fixed = TRUE)
+```
+
+```{r echo=FALSE}
+# - Correcciones a las columnas BARRIO y COLUMNA
+
+# - Correcciones a nombre de barrios
+df$BARRIO <- gsub("NO.1", "NO. 1", df$BARRIO, fixed = TRUE)
+df$BARRIO <- gsub("NO.2", "NO. 2", df$BARRIO, fixed = TRUE)
+df$BARRIO <- gsub("  ", " ", df$BARRIO, fixed = TRUE)
+df$BARRIO <- gsub("BARRIOS DE JESUS", "BARRIO DE JESUS", df$BARRIO, fixed = TRUE)
+df$BARRIO <- gsub("CENTRO ADMINISTRATIVO", "LA ALPUJARRA", df$BARRIO, fixed = TRUE)
+df$BARRIO <- gsub("VILLA LILLIAM", "VILLA LILIAM", df$BARRIO, fixed = TRUE)
+
+# - Categorizamos como SIN INFORMACION a los nombres de barrios y comunas que no se pueden identificar
+
+df$COMUNA <- ifelse(df$COMUNA == "" |
+                     df$COMUNA == "0" |
+                     df$COMUNA == "In" |
+                     df$COMUNA == "AU" |
+                     df$COMUNA == "SN" |
+                     df$COMUNA == "9086", "SIN INFORMACION", df$COMUNA) 
+
+df$BARRIO <- ifelse(df$BARRIO == "" |
+                    df$BARRIO == "0" |
+                    df$BARRIO == "INST" |
+                    df$BARRIO == "AUC1" |
+                    df$BARRIO == "AUC2" |
+                    df$BARRIO == "SIN NOMBRE", "SIN INFORMACION", df$BARRIO)
+
+# - Creamos un vector manualmente con el nombre de TODAS las comunas de la ciudad
+vector_comunas <- c("POPULAR","SANTA CRUZ", "MANRIQUE","ARANJUEZ","CASTILLA", 
+             "DOCE DE OCTUBRE", "ROBLEDO", "VILLA HERMOSA", "BUENOS AIRES",
+             "LA CANDELARIA", "LAURELES ESTADIO", "LA AMERICA", "SAN JAVIER",
+             "EL POBLADO", "GUAYABAL", "BELEN", "CORREGIMIENTO DE SAN SEBASTIAN DE PALMITAS", 
+             "CORREGIMIENTO DE SAN CRISTOBAL", "CORREGIMIENTO DE ALTAVISTA",
+             "CORREGIMIENTO DE SAN ANTONIO DE PRADO", "CORREGIMIENTO DE SANTA ELENA")
+
+# - Creamos un vector manualmente con solo los nombres de los corregimientos
+vector_corregimientos <- c("CORREGIMIENTO DE SAN SEBASTIAN DE PALMITAS", 
+             "CORREGIMIENTO DE SAN CRISTOBAL", "CORREGIMIENTO DE ALTAVISTA",
+             "CORREGIMIENTO DE SAN ANTONIO DE PRADO", "CORREGIMIENTO DE SANTA ELENA")
+
+# - A través de dos variables auxiliares, corregimos nombres de barrios y columnas que están trocados
+df$AUX_BARRIOS <- ifelse(df$COMUNA %in% vector_comunas, df$BARRIO, df$COMUNA)
+df$AUX_COMUNAS <- ifelse(df$COMUNA %in% vector_comunas, df$COMUNA, df$BARRIO)
+df$AUX_BARRIOS <- ifelse(df$AUX_COMUNAS %in% vector_corregimientos, df$AUX_COMUNAS, df$AUX_BARRIOS)
+
+# - Eliminamos columnas que ya no son necearias
+df <- select(df, -BARRIO, -COMUNA)
+
+# - Renombramos las variables auxiliare
+df <- rename(df, c(AUX_BARRIOS = "BARRIO", AUX_COMUNAS = "COMUNA"))
+
+```
+
+- Eliminamos las observaciones que no cuentan con información de barrios y comuna.
+
+```{r, echo=FALSE}
+df <- subset(df, subset = (BARRIO != "SIN INFORMACION"))
+df <- subset(df, subset = (COMUNA != "SIN INFORMACION"))
+```
+
+### Fechas especiales
+
+```{r}
+# - Dia laboral o no
+df$FECHAS_ESP1 <- ifelse(df$DIA_NOMBRE %in% c("SABADO","DOMINGO"), "NO LABORAL", "LABORAL")
+
+# - Festivos
+festivos <- bd_2014 <- read.csv("Bases_de_Datos_Fuente/Festivos_Colombia_2014_2018.csv", header = TRUE, sep  = ",", encoding = 'UTF-8')
+festivos$FESTIVOS_2014_2018 <- as.Date(festivos$FESTIVOS_2014_2018,format = "%d/%m/%Y")
+festivos <- rename(festivos, c(FESTIVOS_2014_2018 = "FECHA"))
+festivos$DIA_NOMBRE <- weekdays(festivos$FECHA)
+
+# - Eliminamos los fectivos que caen sabado y domingo porque ya sabemos que no son laborales
+festivos <- subset(festivos, subset = (DIA_NOMBRE != "sábado"))
+festivos <- subset(festivos, subset = (DIA_NOMBRE != "domingo"))
+
+# - Agregamos festivos a fechas especiales
+df$FECHAS_ESP <- ifelse(df$FECHA %in% festivos$FECHA, "FESTIVO", df$FECHAS_ESP1)
+
+# - Eliminamos variable auxiliar
+df <- select(df, -FECHAS_ESP1)
+
+```
+
+
+Finalmente, volvermos a vizualizar los primeros registros para ver cómo quedó la base de datos tras la limpieza:
+
+```{r}
+# - visualizamos las primeras observaciones del archivo unificado
+head(df)
+write.csv(df, "df_accidentalidad.csv")
+```
