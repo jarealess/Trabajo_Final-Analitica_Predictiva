@@ -495,7 +495,7 @@ predknn_ts_d <- predict(modeloKNN_dia, testX_d)
 ##métricas
 library(Metrics)
 (mseTs_knn_d <- mse(testY_d, predknn_ts_d))
-``` 
+```  
 
 Se calcula la diferencia porcentual.  
 
@@ -564,7 +564,7 @@ predRF_ts_d <- predict(modeloRF_dia, newdata = testSet_dia)
 ## mse
 mseTs_rf_d <- mse(testSet_dia$CANTIDAD, predRF_ts_d)
 paste0("El MSE para el conjunto de prueba es: ",mseTs_rf_d)
-```
+```  
 
 ```{r}
 ### Porcentaje
@@ -611,7 +611,7 @@ predRF_ts_d2 <- predict(modeloRF_dia_2, newdata = testSet_dia)
 ## mse
 mseTs_rf_d2 <- mse(testSet_dia$CANTIDAD, predRF_ts_d2)
 paste0("El MSE para el conjunto de prueba es: ",mseTs_rf_d2)
-```
+```  
 
 ```{r}
 ### Porcentaje
@@ -793,6 +793,7 @@ print(modeloK_sem)
 ```  
 
 ```{r}
+##plot
 plot(modeloK_sem)
 ```  
 
@@ -1311,9 +1312,691 @@ resultados_mes <- data.frame(Modelo=c("GLM(Poisson)", "KNN", "Random Forest"),
 
 kable(resultados_mes) %>% 
   kable_paper() %>%
-    scroll_box(width = "850px", height = "280px")
+    scroll_box(width = "850px", height = "150px")
 ```  
 
 Los valores más bajos de MSE se obtuvieron con el modelo **Random Forest**, que presentó un *MSE* más bajo que para los dos modelos anteriores. Se tomará como el modelo para predecir la accidentalidad por mes en la aplicación de Shiny.   
 
+## **Clusterización de los Barrios**  
 
+Se realiza una copia del dataframe original.  
+
+```{r}
+
+df_clus <- df
+
+kable(head(df_clus,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "285px")
+```  
+
+Se realiza el cambio de la ñ por n para la columna gravedad.  
+
+```{r}
+
+df_clus$GRAVEDAD <- ifelse(df_clus$GRAVEDAD == "SOLO DAÑOS", "SOLO_DANOS", df_clus$GRAVEDAD) 
+
+```  
+
+Luego, se importan algunas librerias para establecer las mejores alternativas de clusterización.  
+
+```{r}
+library(factoextra) # extensión basada en ggplot2 para crear visualizaciones de los resultados de clustering y su evaluación.
+library(cluster)
+library(tidyr) # Librería para transformar un DataFrame
+```  
+
+
+```{r}
+
+# Se crean las diferentes métricas que serán utilizadas para hacer el clustering
+
+cluster <- df_clus
+
+```  
+
+El siguiente paso consiste en crear 4 tablas que van a ser necesarias para realizar la clusterización. Al final todas se unen con un full joint para crear los indicadores.
+
+La primera tabla que se crea es la de barrio/Gravedad.  
+
+```{r}
+
+
+# Se crea la agrupación barrio - gravidad
+
+clust1 <-  cluster%>%
+  group_by(BARRIO,  GRAVEDAD)%>%
+  summarise(
+    total = n()
+    )
+
+
+kable(head(clust1,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+
+```  
+La segunda tabla creada contiene la agrupación Barrio/Fechas especiales.  
+
+```{r}
+
+# Se crea la agrupación barrio - fechas especiales
+clust2 <-  cluster%>%
+  group_by(BARRIO,  FECHAS_ESP)%>%
+  summarise(
+    total = n()
+    )
+
+
+kable(head(clust2,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+
+```  
+La tercera tabla contiene la agrupación de barrios y periodos.  
+
+```{r}
+
+# Se crea la agrupación barrios - periodos
+clust3 <-  cluster%>%
+  group_by(BARRIO,  PERIODO)%>%
+  summarise(
+    total = n()
+    )
+
+kable(head(clust3,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+
+```  
+La ultima tabla contiene la agrupación barrio / clase (choque, atropello, caida ocupante, incendio, volcamiento, otro).  
+
+```{r}
+
+# Se crea la agrupacion barrio - clase (choque, atropello, caida ocupante, incendio, volcamiento, otro)
+clust4 <-  cluster%>%
+  group_by(BARRIO,  CLASE)%>%
+  summarise(
+    total = n()
+    )
+
+kable(head(clust4,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+
+```  
+
+Antes de unir todas las tablas, se transformas las variables de interés de cada una de filas a columnas.  
+
+```{r}
+
+# Transformación de filas en columnas
+
+clust1 <- spread(data = clust1, key = GRAVEDAD, total)
+clust2 <- spread(data = clust2, key = FECHAS_ESP, total)
+clust3 <- spread(data = clust3, key = PERIODO, total)
+clust4 <- spread(data = clust4, key = CLASE, total)
+
+```  
+
+Finalmente se unen todas las tablas para crear el consolidado.  
+
+```{r}
+
+# Unión de todas las métricas
+
+cluster<-full_join(clust1,clust2,by="BARRIO")
+cluster<-full_join(cluster,clust3,by="BARRIO")
+cluster<-full_join(cluster,clust4,by="BARRIO")
+
+kable(head(cluster,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "280px")
+```  
+Después se realiza el cambio de NA por cero para evitar inconsistencias.  
+
+```{r}
+
+# Se reemplazan los na por 0
+
+cluster[is.na(cluster)] = 0
+
+```  
+
+Se crea el primer indicador que establece la proporción de accidentes los fines de semana y festivos vs el total de accidentes: 
+(suma de accidentes en dias festivos y no laborales)/ suma total de accidentes.  
+
+```{r}
+
+# Porcentaje de accidentes fines de semana y festivos: accidentes fines de semana y festivos dividido sobre el total de accidentes
+
+cluster$Porcentaje_accidentes_finsemyfestivos <- (cluster$`NO LABORAL`+cluster$FESTIVO)/(cluster$FESTIVO+cluster$LABORAL+cluster$`NO LABORAL`)
+
+```  
+
+El segundo indicador establece la proporción entre el número de accidentes fatales vs el total de accidentes:
+suma de accidentes faltales / suma total de accidentes.  
+
+```{r}
+
+# Porcentaje de fatalidad: accidentes fatales dividido por el total de accidentes
+
+cluster$Porcentaje_fatalidad <- (cluster$MUERTO)/(cluster$HERIDO+cluster$MUERTO+cluster$SOLO_DANOS)
+
+
+```  
+
+El tercer indicador permite conocer el número de accidentes promedio por año:
+suma de los accidentes de todos los años / nro de años.  
+
+```{r}
+
+# Promedio anual de accidentes por barrio (2014-2018)
+
+cluster$promedio_anual_accidentes <- (cluster$`2014`+cluster$`2015`+cluster$`2016`+cluster$`2017`+cluster$`2018`)/5
+
+
+```  
+
+El ultimo indicador permite establecer que porcentaje de los accidentes que se presentaron fueron atropellos:
+suma de accidentes con atropellos / suma total de accidentes.  
+
+```{r}
+
+# Tasa de atropello
+
+cluster$Porcentaje_atropello <- (cluster$ATROPELLO)/(cluster$ATROPELLO+cluster$`CAIDA OCUPANTE`+cluster$CHOQUE+cluster$OTRO+cluster$VOLCAMIENTO)
+
+```  
+
+
+Finalmente se crea un subset para dejar el dataframe unicamente con las columnas necesarias.  
+
+```{r}
+
+
+# Se seleccionan únicamente las columnas necesarias
+cluster<-subset(cluster, select = c(BARRIO,Porcentaje_accidentes_finsemyfestivos,Porcentaje_fatalidad,promedio_anual_accidentes,Porcentaje_atropello) )
+
+kable(head(cluster,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+```  
+
+Se reemplazan los na del dataframe cluster.  
+
+```{r}
+
+# Se reemplazan los na
+cluster<- cluster%>%
+  mutate_all(~replace(., is.na(.), 0))
+
+```  
+
+Para poder realizar los calculos se nombran las filas del dataframe con el nombre de los barrios y así poder eliminar esta columna.  
+
+```{r}
+
+# Se pone el barrio como nombre de las columnas y luego se elimina del dataframe
+
+cluster <- data.frame(cluster)
+rownames(cluster) <- unlist(cluster[,1])
+
+cluster[,1] <- NULL
+
+kable(head(cluster,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+
+```  
+Finalmente se escalan los datos del dataframe para evitar problemas en el algorimo k-means por la dimensionalidad de los datos.  
+
+```{r}
+
+# Se escalan el dataframe para evitar problemas en k-means por diferencia de escalas
+
+cluster_sc<-scale(cluster)
+
+kable(head(cluster_sc,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "215px")
+```  
+
+Nuevamente se hace un resumen de los indicadores a utilizar la para la clusterización:
+
+1) Promedio anual de accidentes: Suma de los accidentes desde el 2014 a 2018 dividido 5 (nro de años)
+2) Tasa de accidentes fines de semana y festivos: accidentes fines de semana y festivos sobre el total de accidentes
+3) Tasa de fatalidad: accidentes fatales sobre el total de accidentes
+4) tasa de atropellos: atropellos sobre el total de accidentes
+
+
+Una forma sencilla para encontrar el k óptimo de clusters es aplicar el algoritmo de k-means para un rango de valores de K. Luego de esto, se procede a identificar aquel valor a partir del cual la reducción en la suma total de la varianza intra-cluster deja de ser significativa (médoto del códo).
+
+
+Método del codo: Según este método y la interpretación que se da de la gráfica, el k óptimo es igual a 5.  
+
+
+```{r}
+
+# Según el método del codo, la varianza intraclusters deja de ser significativa a partir de k=5
+
+library(ggplot2)
+
+set.seed(1234)
+wcss <- vector()
+for(i in 1:20){
+  wcss[i] <- sum(kmeans(cluster_sc,i)$withinss)
+}
+
+ggplot() + geom_point(aes(x = 1:20, y = wcss), color = 'blue') + 
+  geom_line(aes(x = 1:20, y = wcss), color = 'blue') + 
+  ggtitle("Método del Codo") + 
+  xlab('Cantidad de Centroides k') + 
+  ylab('WCSS')
+```  
+
+
+
+Metodo Silhouette: el número óptimo de clusters (aquel que maximiza la media del slhouette coeficient de todas las observaciones) se logra con k=2.  
+
+```{r}
+
+# Método Silhouette
+
+fviz_nbclust(cluster_sc, kmeans, method = "silhouette")
+```  
+
+Según el método clusgap, el k óptimo estaría en 6.  
+
+```{r}
+
+# Método clusgap para evaluar el número de clusters
+
+gapstat <- clusGap(cluster_sc, FUN = kmeans, B =250, nstart = 40,
+                    K.max = 10 )
+fviz_gap_stat(gapstat)
+```  
+
+
+A continuación se crean diferentes clusters variando K, con el objetivo de ver la representación espacial de diversas formas.  
+
+```{r}
+# Se prueban varios clusters variando k
+
+cluster2 <- kmeans(cluster_sc, centers = 2, iter.max=2000, nstart=100)
+cluster3 <- kmeans(cluster_sc, centers = 3, iter.max=2000, nstart=100)
+cluster4 <- kmeans(cluster_sc, centers = 4, iter.max=2000, nstart=100)
+cluster5 <- kmeans(cluster_sc, centers = 5, iter.max=2000, nstart=100)
+cluster6 <- kmeans(cluster_sc, centers = 6, iter.max=2000, nstart=100)
+cluster7 <- kmeans(cluster_sc, centers = 7, iter.max=2000, nstart=100)
+cluster8 <- kmeans(cluster_sc, centers = 8, iter.max=2000, nstart=100)
+cluster9 <- kmeans(cluster_sc, centers = 9, iter.max=2000, nstart=100)
+cluster10 <- kmeans(cluster_sc, centers = 10, iter.max=2000, nstart=100)
+```  
+
+
+Luego, se genera un dataframe con las agrupaciones con diferentes k.  
+
+```{r}
+
+# Se genera un dataframe con las agrupaciones con diferentes k
+
+clust.mat <- matrix(c(cluster2$cluster), ncol=1)
+
+
+rownames(clust.mat) <- names(cluster2$cluster)
+
+
+clust.mat <- cbind(clust.mat, cluster2$cluster,cluster3$cluster, cluster4$cluster,cluster5$cluster,cluster6$cluster,cluster7$cluster,cluster8$cluster,cluster9$cluster,cluster10$cluster)
+
+
+colnames(clust.mat) <- lapply(c("Cl1","Cl2","Cl3","Cl4","Cl5","Cl6","Cl7","Cl8","Cl9","C10"),paste,"G", sep="")
+
+
+clust.mat <- as.data.frame(clust.mat)
+
+kable(head(clust.mat,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "210px")
+
+```  
+
+
+Después de utlizar varios métodos para encontrar el mejor valor de k, se decide trabajar con k=5.  
+
+
+```{r}
+
+# Se define en una variable el tamaño de los grupos
+
+tamano_grupo<-cluster5$size
+tamano_grupo
+
+```  
+
+Para poder crear el relato de los grupos, se observan las medias de cada una de las variables analizadas.  
+
+```{r}
+
+# Se muestran las medias de la agrupación con k=5
+
+media<-aggregate(cbind(Porcentaje_accidentes_finsemyfestivos,Porcentaje_fatalidad,promedio_anual_accidentes,Porcentaje_atropello) ~ cluster5$cluster, data=cluster, FUN=mean)
+
+kable(head(media,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "210px")
+```  
+
+Con el proposito de tener más información, se agrega a la tabla de medias el tamaño de los grupos.  
+
+```{r}
+
+# Se fusiona tamano_grupo con media
+
+
+kable(cbind(tamano_grupo, media)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "200px")
+```  
+
+Para el mismo análisis por grupo se calculan las desviaciones estándar de cada uno.  
+
+```{r}
+
+# Se muestran las desviaciones de la agrupación con k=5
+
+desv <- aggregate(cbind(Porcentaje_accidentes_finsemyfestivos,Porcentaje_fatalidad,promedio_anual_accidentes,Porcentaje_atropello) ~ cluster5$cluster, data=cluster, FUN=sd)
+
+kable(head(desv,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "200px")
+
+```  
+
+Al igual que en la tabla de medias, se agrega el tamaño de grupos para interpretar mejor los resultados. Para algunos.  
+
+```{r}
+
+# Se fusiona tamano_grupo con desv 
+
+
+kable(cbind(tamano_grupo, desv)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "200px")
+```  
+
+Se crea el dataframe cluster_final que contiene las medidas calculadas por barrio y su agrupación.  
+
+```{r}
+
+# Cluster final
+
+df1 = cbind("BARRIO"=rownames(cluster),cluster)
+
+df2 = cbind("BARRIO"=rownames(clust.mat),clust.mat)
+
+cluster_final<-merge(df1,df2,by="BARRIO",all=T)
+
+cluster_final<-subset(cluster_final, select = c(BARRIO,Porcentaje_accidentes_finsemyfestivos,Porcentaje_fatalidad,promedio_anual_accidentes,Porcentaje_atropello,Cl5G) )
+
+
+kable(head(cluster_final,5)) %>% 
+  kable_paper() %>%
+    scroll_box(width = "850px", height = "200px")
+```  
+
+Relato:
+
+Los cinco grupos están agrupados de mayor a menor promedio anual de accidentalidad. 
+
+Los grupos con más accidentes promedio por año tienen la particularidad de tener una menor tasa de accidentalidad los fines de semana y festivo.
+
+Tanto para los grupos de mayor y menor promedio anual de accidentes se presentan variaciones en la tasa de fatalidad de los accidentes:
+
+Grupo 1: Promedio anual de accidentes alto, tasa de accidentes fines de semana y festivos alto, tasa de fatalidad baja y tasa de atropellos baja.
+
+Grupo 2: Promedio anual de accidentes alto, tasa de accidentes fines de semana y festivos bajo, tasa de fatalidad baja y tasa de atropellos baja.
+
+Grupo 3: Promedio anual de accidentes medio, tasa de accidentes fines de semana y festivos media, tasa de fatalidad media y tasa de atropellos media.
+
+Grupo 4: Promedio anual de accidentes bajo, tasa de accidentes fines de semana y festivos alta, tasa de fatalidad alta y tasa de atropellos alta.
+
+Grupo 5: Promedio anual de accidentes bajo, tasa de accidentes fines de semana y festivos alta, tasa de fatalidad baja y tasa de atropellos alta.
+
+
+
+Luego se procede a utilizar la libreria leaflet para realizar el análisis espacial. Se une el dataframe que contiene el clustering con el dataframe de poligonos que permite identificar los barrios en el mapa.
+
+```{r}
+
+# Se carga el dataframe shp (shape)
+
+library(sf)
+shp <- read_sf("shp/Limite_Barrio_Vereda_Catastral.shp")
+```  
+
+
+Se eliminan las comunas del dataframe med, ya que no se consideraron para este análisis
+
+```{r}
+
+# Quitar comunas
+
+
+med <- subset(x = shp, subset = COMUNA != 50)
+med <- subset(x = med, subset = COMUNA != 60)
+med <- subset(x = med, subset = COMUNA != 70)
+med <- subset(x = med, subset = COMUNA != 80)
+med <- subset(x = med, subset = COMUNA != 90)
+```  
+
+Se cambian los nombres de algunos barrios en el dataframe med para que coincidan con los del dataframe cluster_final
+
+```{r}
+
+# Se cambian los nombres
+
+
+med$NOMBRE_BAR <- gsub("Aures No.1", "AURES NO. 1", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("El Progreso No.2", "EL PROGRESO NO. 2", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Las Lomas No.1", "LAS LOMAS NO. 1", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Las Lomas No.2", "LAS LOMAS NO. 2", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Los Balsos No.1", "LOS BALSOS NO. 1", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Los Balsos No.2", "LOS BALSOS NO. 2", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("San Javier No.1", "SAN JAVIER NO. 1", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("San Javier No.2", "SAN JAVIER NO. 2", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("San José la Cima No.2", "SAN JOSE LA CIMA NO. 2", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Doce de Octubre No.1", "DOCE DE OCTUBRE NO. 1", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Doce de Octubre No.2", "DOCE DE OCTUBRE NO. 2", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("B. Cerro  El Volador", "B. CERRO EL VOLADOR", med$NOMBRE_BAR, fixed = TRUE)
+
+```  
+
+Se reemplazan los caracteres con tilde por caracteres sin tilde
+
+```{r}
+
+# Reemplazar tildes
+
+med$NOMBRE_BAR <- gsub("á", "a", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("é", "e", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("í", "i", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("ó", "o", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("ú", "u", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("ñ", "n", med$NOMBRE_BAR, fixed = TRUE)
+
+med$NOMBRE_BAR <- gsub("Á", "A", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("É", "E", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Í", "I", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Ó", "O", med$NOMBRE_BAR, fixed = TRUE)
+med$NOMBRE_BAR <- gsub("Ú", "U", med$NOMBRE_BAR, fixed = TRUE)
+
+
+```  
+
+Se ponen los nombres de los barrios del dataframe med en mayuscula para poder hacer el join con el dataframe cluster_final
+
+```{r}
+
+# Mayúsculas
+med$NOMBRE_BAR  <- toupper(med$NOMBRE_BAR)
+
+```  
+
+
+Se eliminan filas que contienen barrios repetidos y el centro administrativo la alpujarra, donde no se han presentado accidentes en los años analizados
+
+```{r}
+
+# Eliminar barrios
+
+med <- med[med$OBJECTID!="9", ]
+med <- med[med$OBJECTID!="159", ]
+med <- med[med$OBJECTID!="286", ]
+
+
+
+str(med)
+```  
+
+Se cambiar el nombre de la columna barrio al dataframe cluster_final
+
+```{r}
+
+# Cambio de nombre
+
+colnames(cluster_final)[colnames(cluster_final)=="BARRIO"] <- "NOMBRE_BAR"
+
+
+```  
+
+Se fusionan el dataframe med que contiene los polígonos con el dataframe cluster_final que tiene la agrupación de los barrios
+
+```{r}
+
+# Fusión de dataframes
+
+med<-left_join(med,cluster_final,by="NOMBRE_BAR")
+
+str(med)
+
+```  
+
+A continuación se importa la librereia leaflet para hacer el gráfico de los barrios
+
+```{r}
+
+# Leaflet
+
+library(leaflet)
+
+```  
+
+Se carga el mapa base
+
+```{r}
+
+# Mapa base
+
+m <- leaflet(med) %>%
+  setView(lng = -75.567, lat = 6.217, zoom = 12) %>%
+  addProviderTiles(providers$CartoDB.Positron, group = "Positron", options = providerTileOptions(noWrap = TRUE))
+m
+
+```  
+Se definen los colores de la paleta de colores (Set3), la cual establece un color de grupo distinto para cada uno de los que se encuentra en la columna Cl5G del datraframe.  
+
+```{r}
+
+# Paleta de colores
+
+pal <- colorFactor(
+  palette = "Set3",
+  domain = med$Cl5G,
+  reverse = TRUE)
+
+#pal <- colorFactor(c("cadetblue3", "cadetblue4", "khaki3", "snow4", #"lightsteelblue1"),domain = unique(med$Cl5G), n = 5)
+
+```  
+
+Luego se añaden los poligonos de los barrios, los colores y la leyenda.  
+
+```{r}
+
+# Poligonos, colores, leyenda
+
+
+
+labels <- sprintf(
+  
+  # Se define la información a mostrar en el gráfico
+
+  paste(
+  "Barrio:",med$NOMBRE_BAR,"<br>",
+  "Promedio anual accidentes:",med$promedio_anual_accidentes,"<br>",
+  "Porcentaje accidentes fines de semana y festivo:", round(med$Porcentaje_accidentes_finsemyfestivos,4)*100,"%%","<br>",
+  "Porcentaje de fatalidad:",round(med$Porcentaje_fatalidad,4)*100,"%%","<br>",
+  "Porcentaje de atropello:",round(med$Porcentaje_atropello,4)*100,"%%")
+  
+  
+  #(med$NOMBRE_BAR)
+) %>% lapply(htmltools::HTML)
+
+```  
+
+Finalmente se definen las propiedades de los polígonos como opacidad, tamaño de las lineas, etc y las propiedades de la leyenda.
+
+```{r}
+
+# Se definen las propiedades de los polígonos
+
+m %>% addPolygons(
+  fillColor = ~pal(Cl5G),
+  weight = 1,
+  opacity = 1,
+  color = "white",
+  dashArray = "0",
+  fillOpacity = 0.7,
+  highlight = highlightOptions(
+    weight = 2,
+    color = "red",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  
+  # Se definen las propiedades de la leyenda 
+  
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto")) %>%
+  addLegend(pal = pal, values = ~Cl5G, opacity = 0.7, title = NULL,
+    position = "bottomright")
+
+
+
+```  
+Características espaciales:  
+
+Se encuentra que los barrios con mayor promedio de accidentes por año están ubicados cerca al rio Medellín que es precisamente donde se encuentran las principales vías de la ciudad. El siguiente grupo con mayor promedio de accidentes se ubica un poco más hacia las laderas, sin embargo, este patrón es más visible hacia el sur que hacia el norte. Esto puede deberse a que los barrios del sur por lo general tienen mejores vías y mayor flujo vehicular.
+Los barrios con menor accidentalidad se encuentran totalmente concentrados en las partes altas de las laderas, con una tendencia más clara hacia el norte. La mayoría de los barrios con menor accidentalidad se encuentran en dos sectores específicos de la ciudad: la comuna 13 y la comuna 1 (Popular).  
+
+
+Retos que el agrupamiento puede resolver y posibles planes de acción:  
+
+La estrategia principal se basa en destinar más recursos a los barrios donde más accidentes se presenten. Sin embargo, los demás indicadores servirán para optimizar el uso de los recursos en cada barrio independiente de la cantidad de accidentes que se presenten.  
+
+
+Grupo 1:   
+
+Por tener un promedio alto de accidentes, estos barrios deben tener una mayor disponibilidad de agentes de tránsito, ambulancias, cámaras y grúas para atender los incidentes. Los porcentajes de atropellos y fatalidad no son tan altos como los otros grupos, lo que indica que principalmente lo que se presentan son choques. Pueden realizarse mejoras en la señalización, evaluar la necesidad de nuevos policías acostados y todo aquello que ayude a que se presenten menos incidentes menores en horas pico.  
+
+Grupo 2: Presenta el promedio mayor de accidentes por año en comparación con el resto del grupo, por lo que son a los que más se les debe prestar atención. Al estar ubicados muy cerca a la avenida regional, las vegas y demás vías céntricas de la ciudad, estos barrios deben de contar con presencia permanente del tránsito en horas pico para mejorar la movilidad. 
+La accidentalidad no es tan alta los fines de semana comparada con los porcentajes de los otros grupos, por lo tanto, la mayor atención debe presentarse en las grandes concentraciones de vehículos que ocurren en los días laborales.  
+
+Grupo 3: Este es un grupo con indicadores intermedios, con barrios ubicados principalmente en las laderas occidental, oriental y norte de la ciudad. Aunque no requieren una presencia permanente del tránsito, pueden mejorarse las condiciones de movilidad utilizando herramientas tecnológicas como cámaras.  
+
+Grupo 4: Si bien este grupo tiene un promedio anual de accidentes bajo, presenta un porcentaje alto de accidentes los fines de semana en relación con los demás grupos. Sumado a esto tiene tasas de fatalidad y atropello más altas. La estrategia para estos barrios está más enfocada en campañas educativas que permitan disminuir los accidentes fatales, como son aquellas relacionadas con controlar los excesos de velocidad. Al mismo tiempo, pueden realizarse retenes de tránsito con más frecuencia los fines de semana para hacer diferentes tipos de controles, entre ellos el de la alcoholemia, ya que conducir bajo los efectos del alcohol es una de las razones por las que ocurren más accidentes fatales.  
+
+Grupo 5:  Pueden realizarse acciones muy similares a la del grupo 4, con la diferencia de que este grupo presenta una tasa menor de accidentalidad, razón por la cual no es necesario hacer retenes con tanta frecuencia.  
